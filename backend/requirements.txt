@@ -1,0 +1,38 @@
+# =============================================================
+# AgiesAI Sentinel - Python backend dependencies
+# =============================================================
+#
+# Python version: 3.13+ (verified on 3.13.7)
+# MongoDB is expected at mongodb://127.0.0.1:27017 by default
+# (override with the MONGODB_URI / MONGODB_DB environment variables).
+#
+# Setup (PowerShell):
+#   cd backend
+#   python -m venv venv
+#   .\venv\Scripts\Activate.ps1
+#   pip install -r requirements.txt
+#
+# Run the API:
+#   uvicorn app.main:app --reload --env-file .env
+#
+# Run the tests:
+#   pytest tests -v
+#
+# NOTE: the React/Vite frontend is a separate Node project and its
+# dependencies live in ../package.json (npm install), not here.
+
+# --- Core API stack -------------------------------------------------
+fastapi==0.141.1
+uvicorn==0.52.4
+pydantic==2.13.5
+
+# --- Database -------------------------------------------------------
+pymongo==4.17.0
+
+# --- Configuration --------------------------------------------------
+# Loads backend/.env (SESSION_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD).
+python-dotenv==1.2.3
+
+# --- Development / tests --------------------------------------------
+# Required only to run the security engine tests in backend/tests.
+pytest>=8.3,<10.0

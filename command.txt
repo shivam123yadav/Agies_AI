@@ -1,0 +1,8 @@
+
+
+cd D:\A_hacksynapse\project\backend
+.\venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload
+
+cd D:\A_hacksynapse\project
+npm run dev
