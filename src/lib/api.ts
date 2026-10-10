@@ -1,5 +1,12 @@
+// In the browser, VITE_API_BASE_URL overrides. When not set, use an empty
+// string so all /api/* requests go to the same origin as the frontend —
+// the Vite dev server proxy (see vite.config.ts) forwards them to FastAPI.
+// In Node (tests), import.meta.env is not set, so we fall back to the direct
+// backend URL so mock-fetch URL assertions remain correct.
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) ||
+  (typeof import.meta !== 'undefined' && import.meta.env ? '' : 'http://127.0.0.1:8000');
+
 
 export interface BackendContextSignal {
   signal: string;
@@ -52,6 +59,7 @@ export interface IncidentResponse {
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(options?.headers || {}),
@@ -70,6 +78,45 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+export interface AdminUser {
+  email: string;
+  role: string;
+}
+
+export interface AuthLoginResponse {
+  success: boolean;
+  message: string;
+  admin: AdminUser;
+}
+
+export interface AuthMeResponse {
+  success: boolean;
+  authenticated: boolean;
+  admin: AdminUser;
+}
+
+export interface AuthLogoutResponse {
+  success: boolean;
+  message: string;
+}
+
+export function loginAdmin(credentials: { email: string; password: string }) {
+  return request<AuthLoginResponse>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(credentials),
+  });
+}
+
+export function getAuthMe() {
+  return request<AuthMeResponse>('/api/auth/me');
+}
+
+export function logoutAdmin() {
+  return request<AuthLogoutResponse>('/api/auth/logout', {
+    method: 'POST',
+  });
 }
 
 export function getIncidents(limit = 100) {
@@ -282,32 +329,7 @@ export function updateDetectionRuleStatus(id: string, status: 'Active' | 'Disabl
   );
 }
 
-export interface BackendIncident {
-  incident_id: string;
-  timestamp: string;
-  status?: 'Open' | 'Acknowledged' | 'Resolved';
-
-  employee_name?: string | null;
-  employee_id?: string | null;
-  platform?: string | null;
-
-  risk_score: number;
-  risk_level: 'LOW' | 'MEDIUM' | 'HIGH';
-  action: 'ALLOW' | 'WARN' | 'BLOCK';
-
-  policy: string;
-  policy_message?: string;
-
-  detected: boolean;
-  finding_count: number;
-  finding_types: string[];
-
-  risk_reasons?: BackendRiskReason[];
-
-  context_level: 'LOW' | 'MEDIUM' | 'HIGH';
-  context_modifier: number;
-  context_signals: BackendContextSignal[];
-}
+// BackendIncident is declared once above (near the top of this file).
 
 export interface DetectionRuleInput {
   name: string;

@@ -1,17 +1,58 @@
+import hashlib
+import logging
+import os
+import secrets
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger("agiesai.sentinel")
+
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from pymongo import ReturnDocument
+from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.auth import (
+    create_admin_session,
+    hash_credential,
+    require_admin,
+    require_extension_auth,
+    require_extension_protection,
+    revoke_admin_session,
+    verify_admin_credentials,
+)
+from app.csrf import (
+    CSRFMiddleware,
+    get_csrf_trusted_origins,
+    validate_csrf_configuration,
+)
+from app.rate_limiter import (
+    check_login_rate_limit,
+    record_login_failure,
+    reset_login_rate_limit,
+)
+from app.config import (
+    is_production_env,
+    validate_production_configuration,
+    validate_session_secret,
+)
 from app.database import (
-audit_logs_collection,
-check_database,
-incidents_collection,
-policies_collection,
-employees_collection,
-detection_rules_collection,
+    are_critical_indexes_ready,
+    audit_logs_collection,
+    check_database,
+    detection_rules_collection,
+    employees_collection,
+    ensure_database_indexes,
+    extension_pairing_codes_collection,
+    incidents_collection,
+    is_database_ready,
+    policies_collection,
 )
 from app.engines.contextual_analysis import analyze_context
 from app.engines.pattern_detection import detect_patterns
@@ -19,19 +60,94 @@ from app.engines.policy_engine import evaluate_policy, ensure_default_policies
 from app.engines.detection_rules import DEFAULT_DETECTION_RULES, PROTECTED_RULES, ensure_default_detection_rules
 from app.engines.risk_engine import calculate_risk
 
+validate_production_configuration()
+
+ENV = os.getenv("ENVIRONMENT", "development").lower()
+is_production = is_production_env()
+
 app = FastAPI(
-title="AgiesAI Sentinel API",
-description="AI security and sensitive-data detection backend",
-version="2.1.0",
+    title="AgiesAI Sentinel API",
+    description="AI security and sensitive-data detection backend",
+    version="2.1.0",
+    docs_url=None if is_production else "/docs",
+    redoc_url=None if is_production else "/redoc",
+    openapi_url=None if is_production else "/openapi.json",
+)
+
+SESSION_SECRET = validate_session_secret(is_production=is_production)
+SESSION_HTTPS_ONLY = is_production or (os.getenv("SESSION_HTTPS_ONLY", "false").lower() == "true")
+
+validate_csrf_configuration()
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    session_cookie="sentinel_session",
+    max_age=14 * 24 * 60 * 60,
+    same_site="lax",
+    https_only=SESSION_HTTPS_ONLY,
+)
+
+app.add_middleware(CSRFMiddleware)
+
+cors_origins = (
+    sorted(list(get_csrf_trusted_origins()))
+    if ENV in {"production", "prod"}
+    else ["http://localhost:5173", "http://127.0.0.1:5173"]
 )
 
 app.add_middleware(
-CORSMiddleware,
-allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-allow_credentials=True,
-allow_methods=["*"],
-allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
+PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+
+def generate_pairing_code() -> str:
+    """Generate a 8-character uppercase alphanumeric code formatted as XXXX-XXXX.
+
+    Uses secrets.choice with an unambiguous alphabet (excluding 0, O, 1, I, L).
+    """
+    part1 = "".join(secrets.choice(PAIRING_CODE_ALPHABET) for _ in range(4))
+    part2 = "".join(secrets.choice(PAIRING_CODE_ALPHABET) for _ in range(4))
+    return f"{part1}-{part2}"
+
+
+def normalize_pairing_code(code: str) -> str:
+    """Normalize user-entered pairing code into standard XXXX-XXXX uppercase format."""
+    cleaned = code.strip().upper()
+    if len(cleaned) == 8 and "-" not in cleaned:
+        cleaned = f"{cleaned[:4]}-{cleaned[4:]}"
+    return cleaned
+
+
+def hash_pairing_code(code: str) -> str:
+    """Return SHA-256 hash digest of plaintext pairing code."""
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def generate_extension_credential() -> str:
+    """Generate a high-entropy bearer token for paired extension."""
+    return f"agies_ext_{secrets.token_urlsafe(32)}"
+
+
+
+class AdminLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    email: str = Field(..., min_length=1, max_length=160)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class ExtensionPairRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    code: str = Field(..., min_length=1, max_length=50)
+    device_info: str | dict | None = None
 
 class DetectionRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=10000)
@@ -296,27 +412,26 @@ def root():
 
 @app.get("/api/health")
 def health_check():
-    database_status = check_database()
+    db_connected = check_database()
+    indexes_ready = are_critical_indexes_ready()
+    ready = db_connected and indexes_ready
     return {
-        "status": "healthy" if database_status else "degraded",
+        "status": "healthy" if ready else "degraded",
         "service": "AgiesAI Sentinel Backend",
-        "database": "connected" if database_status else "disconnected",
+        "database": "connected" if db_connected else "disconnected",
+        "indexes_ready": indexes_ready,
     }
 
 
 @app.post("/api/detect")
-def detect(request: DetectionRequest):
+def detect(
+    request: DetectionRequest,
+    employee: dict = Depends(require_extension_protection),
+):
     platform = request.platform if request.platform in ALLOWED_PLATFORMS else "ChatGPT"
-    employee = None
-    if request.employee_id:
-        employee = employees_collection.find_one({"employee_id": request.employee_id})
-    if not employee:
-        raise HTTPException(status_code=400, detail="Employee not found")
-    if employee.get("status") != "Active":
-        raise HTTPException(status_code=400, detail="Employee is not active")
 
     employees_collection.update_one(
-        {"employee_id": request.employee_id},
+        {"employee_id": employee.get("employee_id")},
         {"$set": {"last_active": datetime.now(timezone.utc)}},
     )
 
@@ -332,8 +447,8 @@ def detect(request: DetectionRequest):
     return {
         "success": True,
         "incident_id": incident_id,
-        "employee_id": employee.get("employee_id") if employee else None,
-        "employee_name": employee.get("name") if employee else None,
+        "employee_id": employee.get("employee_id"),
+        "employee_name": employee.get("name"),
         "platform": platform,
         "detection": detection,
         "context": context,
@@ -342,7 +457,7 @@ def detect(request: DetectionRequest):
     }
 
 @app.get("/api/incidents")
-def get_incidents(limit: int = 100):
+def get_incidents(limit: int = 100, _admin: dict = Depends(require_admin)):
     limit = max(1, min(limit, 500))
     incidents = list(
         incidents_collection
@@ -354,7 +469,7 @@ def get_incidents(limit: int = 100):
 
 
 @app.get("/api/incidents/{incident_id}")
-def get_incident(incident_id: str):
+def get_incident(incident_id: str, _admin: dict = Depends(require_admin)):
     incident = incidents_collection.find_one(
         {"incident_id": incident_id}, {"_id": 0}
     )
@@ -367,6 +482,7 @@ def get_incident(incident_id: str):
 def update_incident_status(
     incident_id: str,
     request: IncidentStatusRequest,
+    _admin: dict = Depends(require_admin),
 ):
     if request.status not in ALLOWED_STATUSES:
         raise HTTPException(
@@ -405,6 +521,7 @@ def update_incident_status(
 def record_incident_action(
     incident_id: str,
     request: IncidentActionRequest,
+    _admin: dict = Depends(require_admin),
 ):
     if request.action not in ALLOWED_INCIDENT_ACTIONS:
         raise HTTPException(
@@ -446,13 +563,13 @@ def record_incident_action(
     }
 
 @app.get("/api/detection-rules")
-def get_detection_rules():
+def get_detection_rules(_admin: dict = Depends(require_admin)):
     rules = list(detection_rules_collection.find({}, {"_id": 0}).sort("rule_id", 1))
     return {"success": True, "count": len(rules), "rules": rules}
 
 
 @app.patch("/api/detection-rules/{rule_id}/status")
-def update_detection_rule_status(rule_id: str, request: DetectionRuleRequest):
+def update_detection_rule_status(rule_id: str, request: DetectionRuleRequest, _admin: dict = Depends(require_admin)):
     if request.status not in {"Active", "Disabled"}:
         raise HTTPException(status_code=400, detail="status must be Active or Disabled")
 
@@ -486,7 +603,7 @@ def update_detection_rule_status(rule_id: str, request: DetectionRuleRequest):
 
 
 @app.post("/api/detection-rules")
-def create_detection_rule(request: DetectionRuleRequest):
+def create_detection_rule(request: DetectionRuleRequest, _admin: dict = Depends(require_admin)):
     required = {
         "name": request.name,
         "category": request.category,
@@ -565,7 +682,7 @@ def create_detection_rule(request: DetectionRuleRequest):
 
 
 @app.patch("/api/detection-rules/{rule_id}")
-def update_detection_rule(rule_id: str, request: DetectionRuleRequest):
+def update_detection_rule(rule_id: str, request: DetectionRuleRequest, _admin: dict = Depends(require_admin)):
     existing = detection_rules_collection.find_one({"rule_id": rule_id}, {"_id": 0})
 
     if not existing:
@@ -657,7 +774,7 @@ def update_detection_rule(rule_id: str, request: DetectionRuleRequest):
     }
 
 @app.get("/api/employees")
-def get_employees():
+def get_employees(_admin: dict = Depends(require_admin)):
     employees = list(employees_collection.find({}, {"_id": 0}).sort("name", 1))
     results = []
     for employee in employees:
@@ -668,7 +785,7 @@ def get_employees():
 
 
 @app.get("/api/employees/{employee_id}")
-def get_employee(employee_id: str):
+def get_employee(employee_id: str, _admin: dict = Depends(require_admin)):
     employee = employees_collection.find_one({"employee_id": employee_id}, {"_id": 0})
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -681,7 +798,7 @@ def get_employee(employee_id: str):
 
 
 @app.post("/api/employees")
-def create_employee(request: EmployeeRequest):
+def create_employee(request: EmployeeRequest, _admin: dict = Depends(require_admin)):
     if request.status not in {"Active", "Disabled"}:
         raise HTTPException(status_code=400, detail="status must be Active or Disabled")
     if employees_collection.find_one({"email": request.email.lower()}):
@@ -720,7 +837,7 @@ def create_employee(request: EmployeeRequest):
 
 
 @app.patch("/api/employees/{employee_id}")
-def update_employee(employee_id: str, request: EmployeeRequest):
+def update_employee(employee_id: str, request: EmployeeRequest, _admin: dict = Depends(require_admin)):
     existing = employees_collection.find_one({"employee_id": employee_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -760,8 +877,270 @@ def update_employee(employee_id: str, request: EmployeeRequest):
     item.update(_employee_stats(employee_id))
     return {"success": True, "employee": item}
 
+
+@app.post("/api/auth/login")
+def admin_login(request: Request, body: AdminLoginRequest):
+    """Authenticate administrator using environment credentials and establish session."""
+    check_login_rate_limit(request, body.email)
+
+    admin_email = os.getenv("ADMIN_EMAIL")
+    admin_password = os.getenv("ADMIN_PASSWORD")
+    if not admin_email or not admin_password:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Administrator authentication is not configured on this server",
+        )
+
+    if not verify_admin_credentials(body.email, body.password):
+        record_login_failure(request, body.email)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid admin credentials",
+        )
+
+    reset_login_rate_limit(request, body.email)
+
+    existing_admin = request.session.get("admin")
+    if isinstance(existing_admin, dict) and existing_admin.get("session_id"):
+        revoke_admin_session(existing_admin.get("session_id"))
+
+    admin_data = create_admin_session(admin_email)
+    request.session["admin"] = admin_data
+
+    audit_logs_collection.insert_one(
+        {
+            "timestamp": datetime.now(timezone.utc),
+            "event": "ADMIN_LOGIN_SUCCESS",
+            "admin_email": admin_data["email"],
+        }
+    )
+
+    return {
+        "success": True,
+        "message": "Authenticated successfully",
+        "admin": {
+            "email": admin_data["email"],
+            "role": admin_data["role"],
+        },
+    }
+
+
+@app.get("/api/auth/me")
+def get_auth_me(admin: dict = Depends(require_admin)):
+    """Return whether the current request has a valid admin session and minimal identity."""
+    return {
+        "success": True,
+        "authenticated": True,
+        "admin": {
+            "email": admin.get("email"),
+            "role": admin.get("role", "admin"),
+        },
+    }
+
+
+@app.post("/api/auth/logout")
+def admin_logout(request: Request):
+    """Clear the active admin session, revoke it server-side, and invalidate the session cookie."""
+    admin = request.session.get("admin")
+    admin_email = admin.get("email") if isinstance(admin, dict) else None
+    session_id = admin.get("session_id") if isinstance(admin, dict) else None
+
+    if session_id:
+        revoke_admin_session(session_id)
+
+    request.session.clear()
+
+    if admin_email:
+        audit_logs_collection.insert_one(
+            {
+                "timestamp": datetime.now(timezone.utc),
+                "event": "ADMIN_LOGOUT",
+                "admin_email": admin_email,
+            }
+        )
+
+    return {
+        "success": True,
+        "message": "Logged out successfully",
+    }
+
+
+@app.post("/api/employees/{employee_id}/extension/pairing-code")
+def generate_extension_pairing_code(
+    employee_id: str,
+    admin: dict = Depends(require_admin),
+):
+    """STEP 2: Admin-generated one-time extension pairing code.
+
+    Generates a secure temporary pairing code (valid for 10 minutes) for the specified employee.
+    Invalidates any previous unused pairing codes for this employee.
+    Stores ONLY the SHA-256 hash in database and returns plaintext code ONCE to admin.
+    """
+    employee = employees_collection.find_one({"employee_id": employee_id})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    # Invalidate previous unused pairing codes for this employee
+    extension_pairing_codes_collection.update_many(
+        {"employee_id": employee_id, "used": False},
+        {"$set": {"used": True}},
+    )
+
+    code = generate_pairing_code()
+    code_hash = hash_pairing_code(code)
+
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=10)
+
+    current_ext = _normalize_extension_state(employee.get("extension"))
+    expected_paired_at = current_ext.get("paired_at")
+
+    doc = {
+        "employee_id": employee_id,
+        "code_hash": code_hash,
+        "created_at": now,
+        "expires_at": expires_at,
+        "used": False,
+        "expected_paired_at": expected_paired_at,
+    }
+    extension_pairing_codes_collection.insert_one(doc)
+
+    audit_logs_collection.insert_one(
+        {
+            "timestamp": now,
+            "event": "EXTENSION_PAIRING_CODE_GENERATED",
+            "employee_id": employee_id,
+            "admin_email": admin.get("email") if isinstance(admin, dict) else None,
+            "expires_at": expires_at,
+        }
+    )
+
+    return {
+        "success": True,
+        "employee_id": employee_id,
+        "code": code,
+        "expires_at": expires_at.isoformat(),
+        "expires_in_seconds": 600,
+    }
+
+
+@app.post("/api/extension/pair")
+def pair_extension(request: ExtensionPairRequest):
+    """STEP 3: Validate and consume pairing code atomically, issue extension credential.
+
+    Consumes code atomically in MongoDB, derives employee identity,
+    generates bearer credential, updates employee extension state (paired=True,
+    credential_hash=SHA256(credential)), and returns plaintext credential ONCE.
+    """
+    normalized_code = normalize_pairing_code(request.code)
+    code_hash = hash_pairing_code(normalized_code)
+    now = datetime.now(timezone.utc)
+
+    # Atomically find and consume the pairing code (single-use, non-expired)
+    pairing_doc = extension_pairing_codes_collection.find_one_and_update(
+        {
+            "code_hash": code_hash,
+            "used": False,
+            "expires_at": {"$gt": now},
+        },
+        {"$set": {"used": True, "used_at": now}},
+        return_document=ReturnDocument.BEFORE,
+    )
+
+    if not pairing_doc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired pairing code",
+        )
+
+    employee_id = pairing_doc.get("employee_id")
+    employee = employees_collection.find_one({"employee_id": employee_id})
+    if not employee or employee.get("status") != "Active":
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired pairing code",
+        )
+
+    # Generate high-entropy bearer credential
+    credential = generate_extension_credential()
+    cred_hash = hash_credential(credential)
+
+    current_ext = _normalize_extension_state(employee.get("extension"))
+    device_info = request.device_info if request.device_info is not None else current_ext.get("device_info")
+    updated_extension = {
+        **current_ext,
+        "paired": True,
+        "paired_at": now,
+        "credential_hash": cred_hash,
+        "device_info": device_info,
+    }
+
+    # Optimistic concurrency control: ensure employee pairing state hasn't changed since code generation
+    expected_paired_at = pairing_doc.get("expected_paired_at")
+    if expected_paired_at is None:
+        concurrency_filter = {
+            "employee_id": employee_id,
+            "$or": [
+                {"extension": {"$exists": False}},
+                {"extension": None},
+                {"extension.paired": False},
+                {"extension.paired_at": None},
+            ],
+        }
+    else:
+        concurrency_filter = {
+            "employee_id": employee_id,
+            "extension.paired_at": expected_paired_at,
+        }
+
+    update_result = employees_collection.update_one(
+        concurrency_filter,
+        {"$set": {"extension": updated_extension, "extension_active": True}},
+    )
+
+    if update_result.matched_count == 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Pairing conflict: employee pairing state was modified by another request. Please generate a fresh pairing code.",
+        )
+
+    # Invalidate any remaining unused pairing codes for this employee (safeguard)
+    try:
+        extension_pairing_codes_collection.update_many(
+            {"employee_id": employee_id, "used": False},
+            {"$set": {"used": True, "invalidated_at": now}},
+        )
+    except Exception as exc:
+        logger.warning(
+            "Non-fatal error: failed to invalidate sibling pairing codes for employee_id=%s: %s",
+            employee_id,
+            exc,
+        )
+
+    audit_logs_collection.insert_one(
+        {
+            "timestamp": now,
+            "event": "EXTENSION_PAIRED",
+            "employee_id": employee_id,
+            "employee_name": employee.get("name"),
+            "department": employee.get("department"),
+            "paired_at": now,
+        }
+    )
+
+    return {
+        "success": True,
+        "employee_id": employee_id,
+        "employee_name": employee.get("name"),
+        "credential": credential,
+        "paired_at": now.isoformat(),
+        "access_enabled": updated_extension["access_enabled"],
+        "protection_enabled": updated_extension["protection_enabled"],
+    }
+
+
 @app.get("/api/analytics/organization")
-def get_organization_analytics(range_days: int = 30):
+def get_organization_analytics(range_days: int = 30, _admin: dict = Depends(require_admin)):
     """Return organization-wide security analytics derived only from incident metadata."""
     if range_days not in {7, 30, 90}:
         raise HTTPException(status_code=400, detail="range_days must be 7, 30, or 90")
@@ -922,7 +1301,7 @@ def get_organization_analytics(range_days: int = 30):
     }
 
 @app.get("/api/policies")
-def get_policies():
+def get_policies(_admin: dict = Depends(require_admin)):
     policies = list(
         policies_collection.find({}, {"_id": 0})
         .sort("risk_min", 1)
@@ -945,7 +1324,7 @@ def _validate_policy_overlap(policy_id: str | None, request: PolicyRequest):
 
 
 @app.post("/api/policies")
-def create_policy(request: PolicyRequest):
+def create_policy(request: PolicyRequest, _admin: dict = Depends(require_admin)):
     _validate_policy_overlap(None, request)
     policy_id = f"POL-{uuid4().hex[:6].upper()}"
     timestamp = datetime.now(timezone.utc)
@@ -973,7 +1352,7 @@ def create_policy(request: PolicyRequest):
     return {"success": True, "policy": policy}
 
 @app.patch("/api/policies/{policy_id}")
-def update_policy(policy_id: str, request: PolicyRequest):
+def update_policy(policy_id: str, request: PolicyRequest, _admin: dict = Depends(require_admin)):
     existing = policies_collection.find_one({"policy_id": policy_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Policy not found")
@@ -1003,7 +1382,7 @@ def update_policy(policy_id: str, request: PolicyRequest):
     return {"success": True, "policy": policy}
 
 @app.delete("/api/policies/{policy_id}")
-def delete_policy(policy_id: str):
+def delete_policy(policy_id: str, _admin: dict = Depends(require_admin)):
     existing = policies_collection.find_one({"policy_id": policy_id}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Policy not found")
@@ -1019,7 +1398,7 @@ def delete_policy(policy_id: str):
     return {"success": True, "policy_id": policy_id}
 
 @app.get("/api/audit-log")
-def get_audit_log(limit: int = 100):
+def get_audit_log(limit: int = 100, _admin: dict = Depends(require_admin)):
     limit = max(1, min(limit, 500))
     logs = list(
         audit_logs_collection
@@ -1028,3 +1407,91 @@ def get_audit_log(limit: int = 100):
         .limit(limit)
     )
     return {"success": True, "count": len(logs), "logs": logs}
+
+
+# ---------------------------------------------------------------------------
+# Static frontend serving (same-origin SPA deployment)
+#
+# In production the React/Vite build artefacts are placed at /app/dist inside
+# the Docker image.  STATIC_DIR can be overridden by the environment variable
+# of the same name.  When the directory does not exist (local dev without a
+# build, CI test runs) the static routes are simply not registered and all
+# existing behaviour is unchanged.
+# ---------------------------------------------------------------------------
+
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+_STATIC_DIR_ENV = os.getenv("STATIC_DIR", "")
+_STATIC_DIR: Path | None = None
+
+if _STATIC_DIR_ENV:
+    _candidate = Path(_STATIC_DIR_ENV)
+    if _candidate.is_dir():
+        _STATIC_DIR = _candidate
+        logger.info("Static frontend directory: %s", _STATIC_DIR)
+    else:
+        logger.warning(
+            "STATIC_DIR='%s' does not exist or is not a directory; "
+            "frontend static serving is disabled.",
+            _STATIC_DIR_ENV,
+        )
+else:
+    # Resolve relative to this file: backend/app/main.py → backend/app → backend → project root
+    _default = Path(__file__).resolve().parent.parent.parent / "dist"
+    if _default.is_dir():
+        _STATIC_DIR = _default
+        logger.info("Static frontend directory (auto-detected): %s", _STATIC_DIR)
+    else:
+        logger.info(
+            "No built frontend found at '%s'; static serving disabled. "
+            "Run 'npm run build' at the project root to enable it.",
+            _default,
+        )
+
+if _STATIC_DIR is not None:
+    _assets_dir = _STATIC_DIR / "assets"
+    if _assets_dir.is_dir():
+        # Vite places hashed JS/CSS bundles under /assets — serve them directly.
+        # These files are content-addressed so long cache headers are safe.
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="spa-assets")
+
+    # Individual files that Vite copies to the root of the dist directory
+    # (vite.svg, favicon.ico, robots.txt, …).  We enumerate them explicitly
+    # so that the catch-all below never intercepts /api/* paths.
+    _ROOT_STATIC_EXTS = {".svg", ".ico", ".png", ".txt", ".webmanifest", ".json"}
+
+    @app.get("/vite.svg", include_in_schema=False)
+    @app.get("/favicon.ico", include_in_schema=False)
+    @app.get("/robots.txt", include_in_schema=False)
+    def _root_static_file(request: Request) -> FileResponse:
+        """Serve individual root-level static assets copied by Vite."""
+        filename = request.url.path.lstrip("/")
+        target = _STATIC_DIR / filename  # type: ignore[operator]
+        if target.is_file():
+            return FileResponse(str(target))
+        raise HTTPException(status_code=404, detail="Not found")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def _spa_fallback(full_path: str) -> FileResponse:
+        """SPA catch-all: serve index.html for any path not already handled.
+
+        This route is registered *last*, so all /api/* routes defined above it
+        take priority.  For unknown paths that look like static asset requests
+        (file extension present but file absent) we return a 404 rather than
+        serving index.html, which would give the React router an incorrect
+        document for a missing resource.
+
+        /api/* paths that have no matching route must also return 404 JSON, not
+        index.html — the guard below ensures this explicitly.
+        """
+        # Guard: /api/* paths with no matching route → JSON 404, not index.html
+        if full_path.startswith("api/") or full_path == "api":
+            raise HTTPException(status_code=404, detail="Not found")
+        # Reject requests for missing static-looking paths (e.g. /icon.png)
+        if "." in full_path.rsplit("/", 1)[-1]:
+            raise HTTPException(status_code=404, detail="Not found")
+        index = _STATIC_DIR / "index.html"  # type: ignore[operator]
+        if not index.is_file():
+            raise HTTPException(status_code=503, detail="Frontend not built")
+        return FileResponse(str(index))

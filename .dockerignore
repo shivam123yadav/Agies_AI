@@ -1,0 +1,57 @@
+# =============================================================================
+# AgiesAI Sentinel — .dockerignore
+# Prevent secrets, build artefacts, and dev-only files from entering the image.
+# =============================================================================
+
+# Git metadata
+.git
+.gitignore
+
+# Environment / secrets — NEVER copy into the image
+.env
+.env.*
+backend/.env
+backend/.env.*
+
+# Local Python environments and caches
+backend/venv/
+backend/.venv/
+backend/__pycache__/
+backend/app/__pycache__/
+backend/app/engines/__pycache__/
+**/__pycache__/
+**/*.py[cod]
+**/*.pyo
+**/*.pyd
+.pytest_cache/
+backend/.pytest_cache/
+
+# Local database storage
+backend/data/
+data/
+
+# Frontend dev/build artefacts (rebuilt in Stage 1)
+node_modules/
+dist/
+
+# IDE and OS metadata
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.kilo/
+
+# Test files (not needed at runtime)
+backend/tests/
+tests/
+
+# Documentation
+README.md
+
+# Log files
+logs/
+*.log

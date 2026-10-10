@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppShell } from '@/components/AppShell';
 import { ToastProvider } from '@/components/Toast';
+import { AuthProvider } from '@/context/AuthContext';
+import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { LandingPage } from '@/pages/LandingPage';
 import { DemoPage } from '@/pages/DemoPage';
 import { LoginPage, RegisterPage } from '@/pages/AuthPages';
@@ -20,34 +22,38 @@ import { ProfilePage } from '@/pages/ProfilePage';
 function App() {
 return (
 <ToastProvider>
-<BrowserRouter>
-<Routes>
-{/* Public */}
-<Route path="/" element={<LandingPage />} />
-<Route path="/demo" element={<DemoPage />} />
-<Route path="/login" element={<LoginPage />} />
-<Route path="/register" element={<RegisterPage />} />
+  <AuthProvider>
+    <BrowserRouter>
+      <Routes>
+        {/* Public */}
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/demo" element={<DemoPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
 
-      {/* Admin shell */}
-      <Route element={<AppShell />}>
-        <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/incidents" element={<IncidentsPage />} />
-        <Route path="/incidents/:id" element={<IncidentDetailsPage />} />
-        <Route path="/employees" element={<EmployeesPage />} />
-        <Route path="/employees/:id" element={<EmployeeDetailsPage />} />
-        <Route path="/policies" element={<PoliciesPage />} />
-        <Route path="/detection-rules" element={<DetectionRulesPage />} />
-        <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/audit-log" element={<AuditLogPage />} />
-        <Route path="/extension" element={<ExtensionPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/profile" element={<ProfilePage />} />
-      </Route>
+        {/* Protected Admin shell */}
+        <Route element={<ProtectedRoute />}>
+          <Route element={<AppShell />}>
+            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/incidents" element={<IncidentsPage />} />
+            <Route path="/incidents/:id" element={<IncidentDetailsPage />} />
+            <Route path="/employees" element={<EmployeesPage />} />
+            <Route path="/employees/:id" element={<EmployeeDetailsPage />} />
+            <Route path="/policies" element={<PoliciesPage />} />
+            <Route path="/detection-rules" element={<DetectionRulesPage />} />
+            <Route path="/analytics" element={<AnalyticsPage />} />
+            <Route path="/audit-log" element={<AuditLogPage />} />
+            <Route path="/extension" element={<ExtensionPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
+          </Route>
+        </Route>
 
-      {/* Fallback */}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  </BrowserRouter>
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  </AuthProvider>
 </ToastProvider>
 
 );

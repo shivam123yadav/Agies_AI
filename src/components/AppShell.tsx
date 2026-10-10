@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '@/context/AuthContext';
+import { useToast } from '@/components/Toast';
 import {
   ShieldCheck,
   LayoutDashboard,
@@ -122,8 +124,29 @@ function Breadcrumbs() {
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const { user, logout } = useAuth();
   const meta = pageTitles[pathname] ?? { title: 'Console' };
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await logout();
+      toast.push({ type: 'success', title: 'Signed out', message: 'You have been logged out.' });
+      navigate('/login');
+    } catch (error) {
+      toast.push({
+        type: 'error',
+        title: 'Sign out failed',
+        message: error instanceof Error ? error.message : 'Failed to invalidate server session.',
+      });
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
 
   return (
     <div className="min-h-screen flex">
@@ -206,22 +229,23 @@ export function AppShell() {
               className="flex items-center gap-2.5 rounded-lg pl-1.5 pr-3 py-1.5 hover:bg-ink-800/60 transition-colors"
             >
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-ink-950 text-xs font-bold">
-                {initials('Admin User')}
+                {initials(user?.email || 'Admin User')}
               </div>
               <div className="hidden sm:block leading-tight">
-                <p className="text-xs font-medium text-ink-100">Admin User</p>
-                <p className="text-[11px] text-ink-400">Security Admin</p>
+                <p className="text-xs font-medium text-ink-100">{user?.email || 'Admin User'}</p>
+                <p className="text-[11px] text-ink-400">{user?.role === 'admin' ? 'Security Admin' : (user?.role || 'Security Admin')}</p>
               </div>
             </Link>
 
-            <Link
-              to="/login"
-              className="hidden sm:flex w-9 h-9 rounded-lg items-center justify-center text-ink-400 hover:text-ink-100 hover:bg-ink-800/60 transition-colors"
+            <button
+              onClick={handleLogout}
+              disabled={isLoggingOut}
+              className="flex w-9 h-9 rounded-lg items-center justify-center text-ink-400 hover:text-ink-100 hover:bg-ink-800/60 transition-colors cursor-pointer disabled:opacity-50"
               aria-label="Sign out"
               title="Sign out"
             >
               <LogOut className="w-[18px] h-[18px]" />
-            </Link>
+            </button>
           </div>
           <div className="px-4 lg:px-6 pb-2">
             <Breadcrumbs />

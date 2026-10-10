@@ -1,16 +1,25 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Mail, Building2, Briefcase, ShieldCheck, Check, Camera } from 'lucide-react';
 import { SectionCard } from '@/components/Cards';
 import { useToast } from '@/components/Toast';
 import { initials } from '@/lib/risk';
+import { useAuth } from '@/context/AuthContext';
 
 export function ProfilePage() {
+  const { user } = useAuth();
   const [name, setName] = useState('Admin User');
-  const [email, setEmail] = useState('admin@northwind.co');
-  const [role, setRole] = useState('Security Admin');
+  const [email, setEmail] = useState(user?.email || 'admin@northwind.co');
+  const [role, setRole] = useState(user?.role === 'admin' ? 'Security Admin' : (user?.role || 'Security Admin'));
   const [org, setOrg] = useState('Northwind Inc.');
   const [editing, setEditing] = useState(false);
   const toast = useToast();
+
+  useEffect(() => {
+    if (user?.email) {
+      setEmail(user.email);
+      setName(user.email.split('@')[0]);
+    }
+  }, [user]);
 
   const save = () => {
     setEditing(false);

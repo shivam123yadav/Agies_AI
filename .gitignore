@@ -21,3 +21,21 @@ dist-ssr
 *.sln
 *.sw?
 .env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+.venv/
+env/
+.pytest_cache/
+.pytest_temp/
+backend/.pytest_temp/
+
+# Local database storage
+backend/data/
+data/

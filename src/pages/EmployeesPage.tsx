@@ -26,7 +26,7 @@ export function EmployeesPage() {
       const response = await getEmployees();
       setEmployees(response.employees);
     } catch (error) {
-      toast.push({ type: 'danger', title: 'Unable to load employees', message: error instanceof Error ? error.message : 'Backend unavailable.' });
+      toast.push({ type: 'error', title: 'Unable to load employees', message: error instanceof Error ? error.message : 'Backend unavailable.' });
     } finally {
       setLoading(false);
     }

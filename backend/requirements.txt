@@ -25,9 +25,11 @@
 fastapi==0.141.1
 uvicorn==0.52.4
 pydantic==2.13.5
+itsdangerous==2.2.0
 
 # --- Database -------------------------------------------------------
 pymongo==4.17.0
+dnspython==2.8.0
 
 # --- Configuration --------------------------------------------------
 # Loads backend/.env (SESSION_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD).

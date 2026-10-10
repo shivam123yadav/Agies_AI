@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ShieldCheck, ArrowRight, Mail, Lock, Eye, EyeOff } from 'lucide-react';
+import { ShieldCheck, ArrowRight, Mail, Lock, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { useToast } from '@/components/Toast';
+import { useAuth } from '@/context/AuthContext';
 
 function AuthShell({ children }: { children: React.ReactNode }) {
 return (
@@ -47,21 +48,36 @@ without unnecessary restrictions.
 }
 
 export function LoginPage() {
-const [email, setEmail] = useState('admin@northwind.co');
-const [password, setPassword] = useState('demo-password');
+const [email, setEmail] = useState('');
+const [password, setPassword] = useState('');
 const [show, setShow] = useState(false);
 const [loading, setLoading] = useState(false);
+const [error, setError] = useState<string | null>(null);
 const navigate = useNavigate();
 const toast = useToast();
+const { login, isAuthenticated, isLoading } = useAuth();
 
-const submit = (e: React.FormEvent) => {
-e.preventDefault();
-setLoading(true);
-setTimeout(() => {
-setLoading(false);
-toast.push({ type: 'success', title: 'Signed in', message: 'Welcome back, Admin.' });
-navigate('/dashboard');
-}, 700);
+useEffect(() => {
+  if (!isLoading && isAuthenticated) {
+    navigate('/dashboard', { replace: true });
+  }
+}, [isAuthenticated, isLoading, navigate]);
+
+const submit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  setLoading(true);
+  setError(null);
+  try {
+    await login({ email, password });
+    toast.push({ type: 'success', title: 'Signed in', message: 'Welcome back, Admin.' });
+    navigate('/dashboard');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Invalid administrator credentials.';
+    setError(message);
+    toast.push({ type: 'error', title: 'Sign in failed', message });
+  } finally {
+    setLoading(false);
+  }
 };
 
 return (
@@ -73,7 +89,14 @@ return (
 <span className="font-display font-bold text-ink-50">AgiesAI Sentinel</span>
 </div>
 <h1 className="font-display text-2xl font-bold text-ink-50">Sign in</h1>
-<p className="mt-2 text-sm text-ink-400">Access the security console. Demo credentials are pre-filled.</p>
+<p className="mt-2 text-sm text-ink-400">Access the security console. Enter your administrator credentials.</p>
+
+  {error && (
+    <div className="mt-4 p-3 text-sm text-danger bg-danger/10 border border-danger/20 rounded-lg flex items-center gap-2">
+      <AlertCircle className="w-4 h-4 shrink-0" />
+      <span>{error}</span>
+    </div>
+  )}
 
   <form onSubmit={submit} className="mt-6 space-y-4">
     <div>
@@ -84,6 +107,7 @@ return (
           id="email"
           type="email"
           className="input pl-10"
+          placeholder="admin@domain.com"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
@@ -98,6 +122,7 @@ return (
           id="password"
           type={show ? 'text' : 'password'}
           className="input pl-10 pr-10"
+          placeholder="••••••••"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
@@ -141,18 +166,17 @@ const [org, setOrg] = useState('');
 const [name, setName] = useState('');
 const [email, setEmail] = useState('');
 const [password, setPassword] = useState('');
-const [loading, setLoading] = useState(false);
-const navigate = useNavigate();
 const toast = useToast();
 
 const submit = (e: React.FormEvent) => {
 e.preventDefault();
-setLoading(true);
-setTimeout(() => {
-setLoading(false);
-toast.push({ type: 'success', title: 'Organization created', message: 'Your workspace is ready.' });
-navigate('/dashboard');
-}, 800);
+// Organization provisioning is handled by the backend administrator.
+// Self-service registration is not available in this build.
+toast.push({
+  type: 'error',
+  title: 'Registration unavailable',
+  message: 'Contact your administrator to provision an account.',
+});
 };
 
 return (
@@ -193,9 +217,9 @@ return (
       <input type="checkbox" className="mt-1 rounded border-ink-600 bg-ink-850 text-brand-500 focus:ring-brand-500/30" required />
       <span>I agree to the terms and the privacy-first data handling policy.</span>
     </label>
-    <button type="submit" className="btn-primary w-full py-3" disabled={loading}>
-      {loading ? 'Creating workspace…' : 'Create organization'}
-      {!loading && <ArrowRight className="w-4 h-4" />}
+    <button type="submit" className="btn-primary w-full py-3">
+      Create organization
+      <ArrowRight className="w-4 h-4" />
     </button>
   </form>
 

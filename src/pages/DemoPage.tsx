@@ -19,6 +19,7 @@ import { DetectionPipeline } from '@/components/DetectionPipeline';
 import { PrivacyNotice } from '@/components/PrivacyNotice';
 import { useToast } from '@/components/Toast';
 import { cx } from '@/lib/risk';
+import { API_BASE_URL } from '@/lib/api';
 
 type Scenario = 'safe' | 'warning' | 'blocked';
 
@@ -176,7 +177,7 @@ export function DemoPage() {
 
     try {
       const response = await fetch(
-        'http://127.0.0.1:8000/api/detect',
+        `${API_BASE_URL}/api/detect`,
         {
           method: 'POST',
           headers: {
@@ -203,7 +204,7 @@ export function DemoPage() {
       console.error('AgiesAI backend error:', error);
 
       setApiError(
-        'Unable to connect to the AgiesAI security engine. Make sure the FastAPI server is running on port 8000.',
+        'Unable to connect to the AgiesAI security engine. The backend may be unavailable.',
       );
 
       return null;
