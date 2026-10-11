@@ -8,6 +8,7 @@ import {
   getIncidents,
   getEmployees,
   getPolicies,
+  generatePairingCode,
 } from '../src/lib/api.ts';
 
 // Helper to mock global fetch
@@ -234,5 +235,95 @@ test('7. Extension bearer authentication remains intact and separate from dashbo
     assert.strictEqual(res.success, true);
   } finally {
     mock.restore();
+  }
+});
+
+test('8. Admin can generate single-use extension pairing code for an employee', async () => {
+  const empId = 'EMP-DEV-001';
+  let calledUrl = null;
+  let calledOptions = null;
+
+  const mock = createMockFetch(async (url, options) => {
+    calledUrl = url;
+    calledOptions = options;
+    assert.strictEqual(
+      url,
+      `${API_BASE_URL}/api/employees/${encodeURIComponent(empId)}/extension/pairing-code`
+    );
+    assert.strictEqual(options.method, 'POST');
+    assert.strictEqual(options.credentials, 'include');
+
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        employee_id: empId,
+        code: 'ABCD-EFGH',
+        expires_at: '2026-10-12T04:00:00.000Z',
+        expires_in_seconds: 600,
+      }),
+    };
+  });
+
+  try {
+    const response = await generatePairingCode(empId);
+    assert.strictEqual(response.success, true);
+    assert.strictEqual(response.employee_id, empId);
+    assert.strictEqual(response.code, 'ABCD-EFGH');
+    assert.strictEqual(response.expires_in_seconds, 600);
+    assert.strictEqual(mock.recordedCalls.length, 1);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('9. Pairing code generation handles error responses from backend', async () => {
+  // Test 9a: 401 unauthenticated
+  const mock401 = createMockFetch(async () => {
+    return {
+      ok: false,
+      status: 401,
+      json: async () => ({ detail: 'Admin authentication required' }),
+    };
+  });
+
+  try {
+    await assert.rejects(
+      async () => {
+        await generatePairingCode('EMP-DEV-001');
+      },
+      (err) => {
+        assert(err instanceof Error);
+        assert.strictEqual(err.message, 'Admin authentication required');
+        return true;
+      }
+    );
+  } finally {
+    mock401.restore();
+  }
+
+  // Test 9b: 404 employee not found
+  const mock404 = createMockFetch(async () => {
+    return {
+      ok: false,
+      status: 404,
+      json: async () => ({ detail: 'Employee not found' }),
+    };
+  });
+
+  try {
+    await assert.rejects(
+      async () => {
+        await generatePairingCode('EMP-NONEXISTENT');
+      },
+      (err) => {
+        assert(err instanceof Error);
+        assert.strictEqual(err.message, 'Employee not found');
+        return true;
+      }
+    );
+  } finally {
+    mock404.restore();
   }
 });

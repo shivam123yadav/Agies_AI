@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Mail, Building2, Briefcase, Clock, ShieldCheck, ShieldAlert, AlertOctagon, Ban, Puzzle, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Mail, Building2, Briefcase, Clock, ShieldCheck, ShieldAlert, AlertOctagon, Ban, Puzzle, RefreshCw, KeyRound } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar } from 'recharts';
 import { getEmployee } from '@/lib/api';
 import type { BackendEmployee, BackendIncident } from '@/lib/api';
@@ -8,12 +8,14 @@ import { RiskBadge, ActionBadge, StatusBadge } from '@/components/Risk';
 import { PrivacyNotice } from '@/components/PrivacyNotice';
 import { SectionCard, ChartCard } from '@/components/Cards';
 import { useToast } from '@/components/Toast';
+import { PairingCodeModal } from '@/components/PairingCodeModal';
 import { cx, initials } from '@/lib/risk';
 
 export function EmployeeDetailsPage() {
   const { id } = useParams();
   const [employee, setEmployee] = useState<(BackendEmployee & { stats: any; incidents_detail: BackendIncident[] }) | null>(null);
   const [loading, setLoading] = useState(true);
+  const [pairingModalOpen, setPairingModalOpen] = useState(false);
   const toast = useToast();
 
   const load = async () => {
@@ -57,9 +59,19 @@ export function EmployeeDetailsPage() {
               <span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> {employee.last_active ? new Date(employee.last_active).toLocaleString() : 'Never active'}</span>
             </div>
           </div>
-          <div className={cx('flex items-center gap-2 rounded-lg border px-3 py-2', employee.extension_active ? 'border-success/30 bg-risk-lowSoft' : 'border-ink-700 bg-ink-850')}>
-            <Puzzle className={cx('w-4 h-4', employee.extension_active ? 'text-success' : 'text-ink-500')} />
-            <span className={cx('text-xs font-medium', employee.extension_active ? 'text-success' : 'text-ink-400')}>{employee.extension_active ? 'Extension Active' : 'Extension Inactive'}</span>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <div className={cx('flex items-center gap-2 rounded-lg border px-3 py-2', employee.extension_active ? 'border-success/30 bg-risk-lowSoft' : 'border-ink-700 bg-ink-850')}>
+              <Puzzle className={cx('w-4 h-4', employee.extension_active ? 'text-success' : 'text-ink-500')} />
+              <span className={cx('text-xs font-medium', employee.extension_active ? 'text-success' : 'text-ink-400')}>{employee.extension_active ? 'Extension Active' : 'Extension Inactive'}</span>
+            </div>
+            <button
+              type="button"
+              className="btn-primary text-xs px-3 py-2 inline-flex items-center justify-center gap-1.5 shadow-sm"
+              onClick={() => setPairingModalOpen(true)}
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              <span>Generate Pairing Code</span>
+            </button>
           </div>
         </div>
       </div>
@@ -99,6 +111,11 @@ export function EmployeeDetailsPage() {
       <SectionCard title="Recent Incidents" subtitle="Metadata only — raw prompts are never stored">
         {employee.incidents_detail.length === 0 ? <p className="text-sm text-ink-400 py-6 text-center">No incidents recorded for this employee.</p> : <div className="overflow-x-auto -mx-5"><table className="w-full"><thead className="bg-ink-850/50"><tr className="border-b border-ink-800/60"><th className="table-header text-left px-5 py-3">Incident</th><th className="table-header text-left px-4 py-3">Risk</th><th className="table-header text-left px-4 py-3">Action</th><th className="table-header text-left px-4 py-3">Status</th><th className="table-header text-left px-4 py-3">Time</th></tr></thead><tbody className="divide-y divide-ink-800/60">{employee.incidents_detail.map((inc) => <tr key={inc.incident_id} className="hover:bg-ink-850/40"><td className="table-cell px-5"><Link to={`/incidents/${inc.incident_id}`} className="font-mono text-brand-300 hover:text-brand-200">{inc.incident_id}</Link></td><td className="table-cell"><span className="font-mono mr-2">{inc.risk_score}</span><RiskBadge level={inc.risk_level} size="sm" /></td><td className="table-cell"><ActionBadge action={inc.action} /></td><td className="table-cell"><StatusBadge status={inc.status || 'Open'} /></td><td className="table-cell text-ink-400">{new Date(inc.timestamp).toLocaleString()}</td></tr>)}</tbody></table></div>}
       </SectionCard>
+      <PairingCodeModal
+        open={pairingModalOpen}
+        onClose={() => setPairingModalOpen(false)}
+        employee={employee ? { employee_id: employee.employee_id, name: employee.name } : null}
+      />
       <PrivacyNotice />
     </div>
   );

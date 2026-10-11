@@ -270,6 +270,23 @@ export function getEmployee(id: string) {
   return request<EmployeeResponse>(`/api/employees/${encodeURIComponent(id)}`);
 }
 
+export interface PairingCodeResponse {
+  success: boolean;
+  employee_id: string;
+  code: string;
+  expires_at: string;
+  expires_in_seconds: number;
+}
+
+export function generatePairingCode(employeeId: string) {
+  return request<PairingCodeResponse>(
+    `/api/employees/${encodeURIComponent(employeeId)}/extension/pairing-code`,
+    {
+      method: 'POST',
+    },
+  );
+}
+
 
 export interface OrganizationAnalytics {
   success: boolean;

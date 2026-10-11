@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, Users, Puzzle, ShieldCheck, ShieldAlert, RefreshCw } from 'lucide-react';
+import { Search, Users, Puzzle, ShieldCheck, ShieldAlert, RefreshCw, KeyRound } from 'lucide-react';
 import { RiskBadge } from '@/components/Risk';
 import { EmptyState } from '@/components/States';
 import { useToast } from '@/components/Toast';
+import { PairingCodeModal } from '@/components/PairingCodeModal';
 import { cx, initials } from '@/lib/risk';
 import { getEmployees } from '@/lib/api';
 import type { BackendEmployee } from '@/lib/api';
@@ -14,6 +15,7 @@ const extStatus = ['All', 'Active', 'Inactive'];
 export function EmployeesPage() {
   const [employees, setEmployees] = useState<BackendEmployee[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pairingEmployee, setPairingEmployee] = useState<{ employee_id: string; name: string } | null>(null);
   const [query, setQuery] = useState('');
   const [dept, setDept] = useState('All');
   const [risk, setRisk] = useState('All');
@@ -103,6 +105,7 @@ export function EmployeesPage() {
                   <th className="table-header text-left px-4 py-3">Risk Level</th>
                   <th className="table-header text-left px-4 py-3">Extension</th>
                   <th className="table-header text-left px-4 py-3">Last Active</th>
+                  <th className="table-header text-right px-4 py-3">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-800/60">
@@ -134,6 +137,17 @@ export function EmployeesPage() {
                     <td className="table-cell text-ink-400 whitespace-nowrap">
                       {e.last_active ? new Date(e.last_active).toLocaleString() : 'Never'}
                     </td>
+                    <td className="table-cell text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        className="btn-secondary text-xs py-1 px-2.5 inline-flex items-center gap-1.5 hover:text-brand-300 hover:border-brand-500/40"
+                        title={`Generate pairing code for ${e.name}`}
+                        onClick={() => setPairingEmployee({ employee_id: e.employee_id, name: e.name })}
+                      >
+                        <KeyRound className="w-3.5 h-3.5 text-brand-400" />
+                        <span>Pair</span>
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -141,6 +155,12 @@ export function EmployeesPage() {
           </div>
         )}
       </div>
+
+      <PairingCodeModal
+        open={Boolean(pairingEmployee)}
+        onClose={() => setPairingEmployee(null)}
+        employee={pairingEmployee}
+      />
     </div>
   );
 }
