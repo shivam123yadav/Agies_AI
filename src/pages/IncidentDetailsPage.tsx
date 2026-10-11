@@ -132,8 +132,8 @@ export function IncidentDetailsPage() {
   const rows = [
     { label: 'Incident ID', value: incident.incident_id, icon: Fingerprint, mono: true },
     { label: 'Timestamp', value: formatTimestamp(incident.timestamp), icon: Clock },
-    { label: 'Source Employee', value: 'Not captured by security gateway', icon: Fingerprint },
-    { label: 'AI Platform', value: 'Not captured by security gateway', icon: Fingerprint },
+    { label: 'Source Employee', value: incident.employee_name || incident.employee_id || 'Unknown employee', icon: Fingerprint },
+    { label: 'AI Platform', value: incident.platform || 'Unknown platform', icon: Fingerprint },
     { label: 'Risk Score', value: `${incident.risk_score} / 100`, icon: Gauge },
     { label: 'Risk Level', value: incident.risk_level, icon: Gauge, badge: true },
     { label: 'Category', value: categoryFromType(incident.finding_types[0]), icon: ScanSearch },
