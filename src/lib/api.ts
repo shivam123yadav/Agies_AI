@@ -234,6 +234,15 @@ export interface BackendEmployee {
   category_breakdown: Record<string, number>;
   risk_trend: { timestamp: string; risk_score: number }[];
   recent_incidents: string[];
+  extension?: {
+    paired?: boolean;
+    access_enabled?: boolean;
+    protection_enabled?: boolean;
+    paired_at?: string | null;
+    revoked_at?: string | null;
+    last_seen?: string | null;
+    device_info?: string | null;
+  };
 }
 
 export interface EmployeesResponse {
@@ -281,6 +290,21 @@ export interface PairingCodeResponse {
 export function generatePairingCode(employeeId: string) {
   return request<PairingCodeResponse>(
     `/api/employees/${encodeURIComponent(employeeId)}/extension/pairing-code`,
+    {
+      method: 'POST',
+    },
+  );
+}
+
+export interface RevokeExtensionResponse {
+  success: boolean;
+  message: string;
+  employee_id: string;
+}
+
+export function revokeExtension(employeeId: string) {
+  return request<RevokeExtensionResponse>(
+    `/api/employees/${encodeURIComponent(employeeId)}/extension/revoke`,
     {
       method: 'POST',
     },

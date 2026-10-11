@@ -162,6 +162,8 @@ ADMIN_ONLY_ROUTES = [
     ("PATCH",  "/api/employees/EMP-FAKE",     {"name": "x", "email": "x@x.co", "department": "x", "role": "x"}),
     # Extension pairing-code (admin-only)
     ("POST",   "/api/employees/EMP-FAKE/extension/pairing-code", None),
+    # Extension revoke (admin-only)
+    ("POST",   "/api/employees/EMP-FAKE/extension/revoke",       None),
     # Analytics
     ("GET",    "/api/analytics/organization", None),
     # Policies

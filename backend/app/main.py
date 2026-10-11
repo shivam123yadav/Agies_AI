@@ -231,6 +231,7 @@ def default_extension_state() -> dict:
         "protection_enabled": True,
         "credential_hash": None,
         "paired_at": None,
+        "revoked_at": None,
         "last_seen": None,
         "device_info": None,
     }
@@ -252,9 +253,29 @@ def _normalize_extension_state(raw) -> dict:
         "protection_enabled": bool(raw.get("protection_enabled", defaults["protection_enabled"])),
         "credential_hash": raw.get("credential_hash", defaults["credential_hash"]),
         "paired_at": raw.get("paired_at", defaults["paired_at"]),
+        "revoked_at": raw.get("revoked_at", defaults["revoked_at"]),
         "last_seen": raw.get("last_seen", defaults["last_seen"]),
         "device_info": raw.get("device_info", defaults["device_info"]),
     }
+
+
+def _to_utc_datetime(val) -> datetime | None:
+    """Safely convert datetime/ISO string/None to timezone-aware UTC datetime."""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        if val.tzinfo is None or val.tzinfo.utcoffset(val) is None:
+            return val.replace(tzinfo=timezone.utc)
+        return val.astimezone(timezone.utc)
+    if isinstance(val, str):
+        try:
+            dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            return None
+    return None
 
 
 DEFAULT_EMPLOYEES = [
@@ -1034,6 +1055,68 @@ def generate_extension_pairing_code(
     }
 
 
+@app.post("/api/employees/{employee_id}/extension/revoke")
+def revoke_extension_credential(
+    employee_id: str,
+    admin: dict = Depends(require_admin),
+):
+    """Administrator-only endpoint to immediately revoke an employee's browser extension credential.
+
+    1. Verifies the employee exists (404 if missing).
+    2. Clears extension.credential_hash, paired=False, paired_at=None, extension_active=False.
+    3. Sets extension.revoked_at to the current UTC timestamp.
+    4. Invalidates all pending/unused pairing codes for this employee so they cannot reconnect.
+    5. Records an EXTENSION_CREDENTIAL_REVOKED audit log event without sensitive secrets.
+    """
+    employee = employees_collection.find_one({"employee_id": employee_id})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    now = datetime.now(timezone.utc)
+    current_ext = _normalize_extension_state(employee.get("extension"))
+    updated_extension = {
+        **current_ext,
+        "paired": False,
+        "credential_hash": None,
+        "paired_at": None,
+        "revoked_at": now,
+    }
+
+    employees_collection.update_one(
+        {"employee_id": employee_id},
+        {
+            "$set": {
+                "extension": updated_extension,
+                "extension_active": False,
+            }
+        },
+    )
+
+    # Invalidate all unused pairing codes for this employee
+    extension_pairing_codes_collection.update_many(
+        {"employee_id": employee_id, "used": False},
+        {"$set": {"used": True, "invalidated_at": now}},
+    )
+
+    admin_email = admin.get("email") if isinstance(admin, dict) else None
+    audit_logs_collection.insert_one(
+        {
+            "timestamp": now,
+            "event": "EXTENSION_CREDENTIAL_REVOKED",
+            "employee_id": employee_id,
+            "employee_name": employee.get("name"),
+            "admin_email": admin_email,
+            "action": "REVOKE_EXTENSION_CREDENTIAL",
+        }
+    )
+
+    return {
+        "success": True,
+        "message": "Extension credential revoked successfully",
+        "employee_id": employee_id,
+    }
+
+
 @app.post("/api/extension/pair")
 def pair_extension(request: ExtensionPairRequest):
     """STEP 3: Validate and consume pairing code atomically, issue extension credential.
@@ -1071,11 +1154,23 @@ def pair_extension(request: ExtensionPairRequest):
             detail="Invalid or expired pairing code",
         )
 
+    current_ext = _normalize_extension_state(employee.get("extension"))
+
+    # Security check: ensure pairing code was not generated prior to extension credential revocation
+    revoked_at = _to_utc_datetime(current_ext.get("revoked_at"))
+    code_created_at = _to_utc_datetime(pairing_doc.get("created_at"))
+    if revoked_at is not None and (
+        code_created_at is None or code_created_at <= revoked_at
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired pairing code",
+        )
+
     # Generate high-entropy bearer credential
     credential = generate_extension_credential()
     cred_hash = hash_credential(credential)
 
-    current_ext = _normalize_extension_state(employee.get("extension"))
     device_info = request.device_info if request.device_info is not None else current_ext.get("device_info")
     updated_extension = {
         **current_ext,
@@ -1087,9 +1182,11 @@ def pair_extension(request: ExtensionPairRequest):
 
     # Optimistic concurrency control: ensure employee pairing state hasn't changed since code generation
     expected_paired_at = pairing_doc.get("expected_paired_at")
+    expected_revoked_at = current_ext.get("revoked_at")
     if expected_paired_at is None:
         concurrency_filter = {
             "employee_id": employee_id,
+            "extension.revoked_at": expected_revoked_at,
             "$or": [
                 {"extension": {"$exists": False}},
                 {"extension": None},
@@ -1101,6 +1198,7 @@ def pair_extension(request: ExtensionPairRequest):
         concurrency_filter = {
             "employee_id": employee_id,
             "extension.paired_at": expected_paired_at,
+            "extension.revoked_at": expected_revoked_at,
         }
 
     update_result = employees_collection.update_one(

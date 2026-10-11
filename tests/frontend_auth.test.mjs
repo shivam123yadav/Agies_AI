@@ -9,6 +9,7 @@ import {
   getEmployees,
   getPolicies,
   generatePairingCode,
+  revokeExtension,
 } from '../src/lib/api.ts';
 
 // Helper to mock global fetch
@@ -316,6 +317,92 @@ test('9. Pairing code generation handles error responses from backend', async ()
     await assert.rejects(
       async () => {
         await generatePairingCode('EMP-NONEXISTENT');
+      },
+      (err) => {
+        assert(err instanceof Error);
+        assert.strictEqual(err.message, 'Employee not found');
+        return true;
+      }
+    );
+  } finally {
+    mock404.restore();
+  }
+});
+
+test('10. Admin can revoke employee extension credential', async () => {
+  const empId = 'EMP-DEV-001';
+  let calledUrl = null;
+  let calledOptions = null;
+
+  const mock = createMockFetch(async (url, options) => {
+    calledUrl = url;
+    calledOptions = options;
+    assert.strictEqual(
+      url,
+      `${API_BASE_URL}/api/employees/${encodeURIComponent(empId)}/extension/revoke`
+    );
+    assert.strictEqual(options.method, 'POST');
+    assert.strictEqual(options.credentials, 'include');
+
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        message: 'Extension credential revoked successfully',
+        employee_id: empId,
+      }),
+    };
+  });
+
+  try {
+    const response = await revokeExtension(empId);
+    assert.strictEqual(response.success, true);
+    assert.strictEqual(response.employee_id, empId);
+    assert.strictEqual(mock.recordedCalls.length, 1);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('11. Revoking extension credential handles errors from backend', async () => {
+  // Test 11a: 401 unauthenticated
+  const mock401 = createMockFetch(async () => {
+    return {
+      ok: false,
+      status: 401,
+      json: async () => ({ detail: 'Admin authentication required' }),
+    };
+  });
+
+  try {
+    await assert.rejects(
+      async () => {
+        await revokeExtension('EMP-DEV-001');
+      },
+      (err) => {
+        assert(err instanceof Error);
+        assert.strictEqual(err.message, 'Admin authentication required');
+        return true;
+      }
+    );
+  } finally {
+    mock401.restore();
+  }
+
+  // Test 11b: 404 employee not found
+  const mock404 = createMockFetch(async () => {
+    return {
+      ok: false,
+      status: 404,
+      json: async () => ({ detail: 'Employee not found' }),
+    };
+  });
+
+  try {
+    await assert.rejects(
+      async () => {
+        await revokeExtension('EMP-NONEXISTENT');
       },
       (err) => {
         assert(err instanceof Error);

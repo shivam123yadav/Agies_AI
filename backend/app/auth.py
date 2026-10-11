@@ -191,6 +191,7 @@ def _sanitize_extension_context(raw_ext: Any) -> Dict[str, Any]:
         "access_enabled": bool(raw_ext.get("access_enabled", True)),
         "protection_enabled": bool(raw_ext.get("protection_enabled", True)),
         "paired_at": raw_ext.get("paired_at"),
+        "revoked_at": raw_ext.get("revoked_at"),
         "last_seen": raw_ext.get("last_seen"),
         "device_info": raw_ext.get("device_info"),
     }

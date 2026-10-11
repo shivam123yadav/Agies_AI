@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, Mail, Building2, Briefcase, Clock, ShieldCheck, ShieldAlert, AlertOctagon, Ban, Puzzle, RefreshCw, KeyRound } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar } from 'recharts';
-import { getEmployee } from '@/lib/api';
+import { getEmployee, revokeExtension } from '@/lib/api';
 import type { BackendEmployee, BackendIncident } from '@/lib/api';
 import { RiskBadge, ActionBadge, StatusBadge } from '@/components/Risk';
 import { PrivacyNotice } from '@/components/PrivacyNotice';
 import { SectionCard, ChartCard } from '@/components/Cards';
 import { useToast } from '@/components/Toast';
+import { ConfirmDialog } from '@/components/Modal';
 import { PairingCodeModal } from '@/components/PairingCodeModal';
 import { cx, initials } from '@/lib/risk';
 
@@ -16,6 +17,8 @@ export function EmployeeDetailsPage() {
   const [employee, setEmployee] = useState<(BackendEmployee & { stats: any; incidents_detail: BackendIncident[] }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [pairingModalOpen, setPairingModalOpen] = useState(false);
+  const [revokeConfirmOpen, setRevokeConfirmOpen] = useState(false);
+  const [revoking, setRevoking] = useState(false);
   const toast = useToast();
 
   const load = async () => {
@@ -28,6 +31,29 @@ export function EmployeeDetailsPage() {
       setEmployee(null);
       toast.push({ type: 'error', title: 'Unable to load employee', message: error instanceof Error ? error.message : 'Backend unavailable.' });
     } finally { setLoading(false); }
+  };
+
+  const handleRevoke = async () => {
+    if (!employee || revoking) return;
+    setRevoking(true);
+    try {
+      await revokeExtension(employee.employee_id);
+      toast.push({
+        type: 'success',
+        title: 'Extension credential revoked',
+        message: `Browser extension for ${employee.name} has been disconnected.`,
+      });
+      setRevokeConfirmOpen(false);
+      await load();
+    } catch (error) {
+      toast.push({
+        type: 'error',
+        title: 'Revocation failed',
+        message: error instanceof Error ? error.message : 'Unable to revoke extension credential.',
+      });
+    } finally {
+      setRevoking(false);
+    }
   };
 
   useEffect(() => { void load(); }, [id]);
@@ -64,10 +90,23 @@ export function EmployeeDetailsPage() {
               <Puzzle className={cx('w-4 h-4', employee.extension_active ? 'text-success' : 'text-ink-500')} />
               <span className={cx('text-xs font-medium', employee.extension_active ? 'text-success' : 'text-ink-400')}>{employee.extension_active ? 'Extension Active' : 'Extension Inactive'}</span>
             </div>
+            {(employee.extension_active || employee.extension?.paired) && (
+              <button
+                type="button"
+                className="btn-danger text-xs px-3 py-2 inline-flex items-center justify-center gap-1.5 shadow-sm"
+                onClick={() => setRevokeConfirmOpen(true)}
+                disabled={revoking}
+                title={`Revoke browser extension credential for ${employee.name}`}
+              >
+                <Ban className="w-3.5 h-3.5" />
+                <span>Revoke Extension</span>
+              </button>
+            )}
             <button
               type="button"
               className="btn-primary text-xs px-3 py-2 inline-flex items-center justify-center gap-1.5 shadow-sm"
               onClick={() => setPairingModalOpen(true)}
+              disabled={revoking}
             >
               <KeyRound className="w-3.5 h-3.5" />
               <span>Generate Pairing Code</span>
@@ -115,6 +154,15 @@ export function EmployeeDetailsPage() {
         open={pairingModalOpen}
         onClose={() => setPairingModalOpen(false)}
         employee={employee ? { employee_id: employee.employee_id, name: employee.name } : null}
+      />
+      <ConfirmDialog
+        open={revokeConfirmOpen}
+        onClose={() => !revoking && setRevokeConfirmOpen(false)}
+        onConfirm={() => void handleRevoke()}
+        title="Revoke Extension Credential"
+        message={`Are you sure you want to revoke the extension credential for ${employee.name}? This will immediately disconnect the employee's browser extension and block prompt analysis until paired again with a new code.`}
+        confirmLabel={revoking ? 'Revoking…' : 'Revoke Credential'}
+        danger
       />
       <PrivacyNotice />
     </div>
