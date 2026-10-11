@@ -141,6 +141,12 @@ def extract_request_origin(request: Request) -> Optional[str]:
     return None
 
 
+def is_incident_action_path(path: str) -> bool:
+    """Check if the normalized path matches /api/incidents/{incident_id}/action."""
+    parts = path.strip("/").split("/")
+    return len(parts) == 4 and parts[0] == "api" and parts[1] == "incidents" and parts[3] == "action"
+
+
 def verify_csrf(request: Request) -> bool:
     """Verify incoming request satisfies CSRF origin requirements.
 
@@ -154,6 +160,14 @@ def verify_csrf(request: Request) -> bool:
     path = request.url.path.rstrip("/")
     if path in CSRF_EXEMPT_PATHS:
         return True
+
+    # 2b. Narrow exemption for incident-action ONLY when explicitly carrying Authorization: Bearer
+    # This allows paired extension requests to reach authentication without Origin checks,
+    # while preserving strict Origin/Referer CSRF checks for cookie-authenticated admin requests.
+    if is_incident_action_path(path):
+        auth_header = request.headers.get("authorization", "").strip()
+        if auth_header.lower().startswith("bearer "):
+            return True
 
     # 3. For protected mutations, require a valid and trusted origin
     trusted_origins = get_csrf_trusted_origins()

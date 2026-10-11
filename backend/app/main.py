@@ -22,6 +22,7 @@ from app.auth import (
     create_admin_session,
     hash_credential,
     require_admin,
+    require_admin_or_extension,
     require_extension_auth,
     require_extension_protection,
     revoke_admin_session,
@@ -521,7 +522,7 @@ def update_incident_status(
 def record_incident_action(
     incident_id: str,
     request: IncidentActionRequest,
-    _admin: dict = Depends(require_admin),
+    auth: dict = Depends(require_admin_or_extension),
 ):
     if request.action not in ALLOWED_INCIDENT_ACTIONS:
         raise HTTPException(
@@ -538,6 +539,15 @@ def record_incident_action(
             status_code=400,
             detail="Incident action tracking is only valid for WARN incidents",
         )
+
+    if auth.get("actor_type") == "extension":
+        auth_employee_id = auth.get("employee_id")
+        incident_employee_id = incident.get("employee_id")
+        if not incident_employee_id or incident_employee_id != auth_employee_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden: Cannot record action for an incident belonging to another employee",
+            )
 
     timestamp = datetime.now(timezone.utc)
 

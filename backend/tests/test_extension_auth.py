@@ -59,6 +59,7 @@ def setup_auth_test_data():
         "EMP-AUTH-004",
         "EMP-AUTH-005",
         "EMP-AUTH-006",
+        "EMP-AUTH-007",
     ]
     employees_collection.delete_many({"employee_id": {"$in": test_emp_ids}})
     extension_pairing_codes_collection.delete_many({"employee_id": {"$in": test_emp_ids}})
@@ -194,13 +195,35 @@ def setup_auth_test_data():
         "created_at": now,
     }
 
-    employees_collection.insert_many([emp1, emp2, emp3, emp4, emp5, emp6])
+    # Second active paired employee (EMP-AUTH-007) for cross-employee IDOR tests
+    emp7 = {
+        "employee_id": "EMP-AUTH-007",
+        "name": "Auth User 7",
+        "email": "auth7@example.com",
+        "department": "Engineering",
+        "role": "Developer",
+        "extension_active": True,
+        "status": "Active",
+        "extension": {
+            "paired": True,
+            "access_enabled": True,
+            "protection_enabled": True,
+            "credential_hash": hash_credential("agies_ext_valid_secret_token_77777"),
+            "paired_at": now,
+            "last_seen": now,
+            "device_info": "Chrome / Linux",
+        },
+        "created_at": now,
+    }
+
+    employees_collection.insert_many([emp1, emp2, emp3, emp4, emp5, emp6, emp7])
 
     yield
 
     employees_collection.delete_many({"employee_id": {"$in": test_emp_ids}})
     extension_pairing_codes_collection.delete_many({"employee_id": {"$in": test_emp_ids}})
     incidents_collection.delete_many({"employee_id": {"$in": test_emp_ids}})
+    audit_logs_collection.delete_many({"employee_id": {"$in": test_emp_ids}})
 
 
 def test_1_missing_bearer_credential_rejected():
@@ -629,3 +652,272 @@ def test_17_detect_decisions_and_privacy_preserved():
     assert "4111 1111 1111 1111" not in str(audit_log)
     assert secret_prompt not in str(audit_log)
 
+
+def _create_test_warn_incident(incident_id: str, employee_id: str) -> dict:
+    inc = {
+        "incident_id": incident_id,
+        "timestamp": datetime.now(timezone.utc),
+        "status": "Open",
+        "platform": "ChatGPT",
+        "employee_id": employee_id,
+        "employee_name": f"User {employee_id}",
+        "risk_score": 65,
+        "risk_level": "MEDIUM",
+        "action": "WARN",
+        "policy": "Default",
+        "policy_message": "Sensitive warning",
+        "detected": True,
+        "finding_count": 1,
+        "finding_types": ["EMAIL"],
+    }
+    incidents_collection.insert_one(inc)
+    return inc
+
+
+# ===========================================================================
+# Incident-Action Authorization Regression Tests
+# ===========================================================================
+
+
+def test_18_incident_action_administrator_success():
+    """Admin session successfully records incident action on WARN incident."""
+    inc_id = "INC-AUTH-WARN-001"
+    _create_test_warn_incident(inc_id, "EMP-AUTH-001")
+    app.dependency_overrides[require_admin] = mock_admin_user
+    try:
+        res = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            json={"action": "CONTINUE_ANYWAY"},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["success"] is True
+        assert data["incident_id"] == inc_id
+        assert data["action"] == "CONTINUE_ANYWAY"
+        assert data["message"] == "Incident action recorded"
+
+        # Verify audit log entry
+        audit_doc = audit_logs_collection.find_one(
+            {"incident_id": inc_id, "event": "CONTINUE_ANYWAY"}
+        )
+        assert audit_doc is not None
+        assert audit_doc["employee_id"] == "EMP-AUTH-001"
+    finally:
+        app.dependency_overrides.clear()
+        incidents_collection.delete_many({"incident_id": inc_id})
+        audit_logs_collection.delete_many({"incident_id": inc_id})
+
+
+def test_19_incident_action_extension_owner_success():
+    """Paired extension owner records action on their own WARN incident."""
+    inc_id = "INC-AUTH-WARN-002"
+    _create_test_warn_incident(inc_id, "EMP-AUTH-001")
+    token = "agies_ext_valid_secret_token_12345"  # EMP-AUTH-001
+    try:
+        res = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "WARNING_CANCELLED"},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["success"] is True
+        assert data["incident_id"] == inc_id
+        assert data["action"] == "WARNING_CANCELLED"
+
+        # Verify audit log created with employee's identity
+        audit_doc = audit_logs_collection.find_one(
+            {"incident_id": inc_id, "event": "WARNING_CANCELLED"}
+        )
+        assert audit_doc is not None
+        assert audit_doc["employee_id"] == "EMP-AUTH-001"
+
+        # Confirm incident document status was NOT modified
+        inc_doc = incidents_collection.find_one({"incident_id": inc_id})
+        assert inc_doc["status"] == "Open"
+    finally:
+        incidents_collection.delete_many({"incident_id": inc_id})
+        audit_logs_collection.delete_many({"incident_id": inc_id})
+
+
+def test_20_incident_action_cross_employee_rejected():
+    """Extension caller cannot record action on another employee's incident (IDOR prevented)."""
+    inc_id = "INC-AUTH-WARN-003"
+    _create_test_warn_incident(inc_id, "EMP-AUTH-001")
+    # EMP-AUTH-007 attempts to mutate EMP-AUTH-001's incident
+    token_other = "agies_ext_valid_secret_token_77777"  # EMP-AUTH-007
+    try:
+        res = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            headers={"Authorization": f"Bearer {token_other}"},
+            json={"action": "CONTINUE_ANYWAY"},
+        )
+        assert res.status_code == 403
+        assert "another employee" in res.json()["detail"].lower()
+
+        # Verify zero audit log mutation
+        audit_doc = audit_logs_collection.find_one({"incident_id": inc_id})
+        assert audit_doc is None
+    finally:
+        incidents_collection.delete_many({"incident_id": inc_id})
+
+
+def test_21_incident_action_client_supplied_id_ignored():
+    """Client-supplied employee_id in payload cannot spoof identity or bypass ownership check."""
+    inc_id = "INC-AUTH-WARN-004"
+    _create_test_warn_incident(inc_id, "EMP-AUTH-001")
+    # EMP-AUTH-007 supplies EMP-AUTH-001 in body
+    token_other = "agies_ext_valid_secret_token_77777"
+    try:
+        res = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            headers={"Authorization": f"Bearer {token_other}"},
+            json={"action": "CONTINUE_ANYWAY", "employee_id": "EMP-AUTH-001"},
+        )
+        assert res.status_code == 403
+    finally:
+        incidents_collection.delete_many({"incident_id": inc_id})
+
+
+def test_22_incident_action_invalid_and_malformed_bearer_rejected_no_fallback():
+    """Invalid or malformed bearer is rejected with 401 and never falls back to admin session."""
+    inc_id = "INC-AUTH-WARN-005"
+    _create_test_warn_incident(inc_id, "EMP-AUTH-001")
+    app.dependency_overrides[require_admin] = mock_admin_user
+    try:
+        # Malformed Authorization header
+        res_malformed = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            headers={"Authorization": "Basic dXNlcjpwYXNz"},
+            json={"action": "CONTINUE_ANYWAY"},
+        )
+        assert res_malformed.status_code == 401
+
+        # Invalid token value
+        res_invalid = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            headers={"Authorization": "Bearer agies_ext_non_existent_token"},
+            json={"action": "CONTINUE_ANYWAY"},
+        )
+        assert res_invalid.status_code == 401
+        assert res_invalid.json()["detail"] == "Invalid authentication credentials"
+    finally:
+        app.dependency_overrides.clear()
+        incidents_collection.delete_many({"incident_id": inc_id})
+
+
+def test_23_incident_action_disabled_and_inactive_extension_rejected():
+    """De-provisioned or disabled extension bearer is rejected with 401 or 403."""
+    inc_id = "INC-AUTH-WARN-006"
+    _create_test_warn_incident(inc_id, "EMP-AUTH-004")
+    try:
+        # Inactive/disabled employee (EMP-AUTH-004) -> 403
+        res_disabled = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            headers={"Authorization": "Bearer agies_ext_token_inactive_emp"},
+            json={"action": "CONTINUE_ANYWAY"},
+        )
+        assert res_disabled.status_code == 403
+
+        # Access revoked (EMP-AUTH-002, access_enabled=False) -> 403
+        res_revoked = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            headers={"Authorization": "Bearer agies_ext_token_disabled_access"},
+            json={"action": "CONTINUE_ANYWAY"},
+        )
+        assert res_revoked.status_code == 403
+
+        # Unpaired (EMP-AUTH-006) -> 401
+        res_unpaired = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            headers={"Authorization": "Bearer agies_ext_token_unpaired"},
+            json={"action": "CONTINUE_ANYWAY"},
+        )
+        assert res_unpaired.status_code == 401
+    finally:
+        incidents_collection.delete_many({"incident_id": inc_id})
+
+
+def test_24_incident_action_missing_and_non_warn_incident_rejected():
+    """Non-existent incident returns 404; non-WARN incident returns 400."""
+    token = "agies_ext_valid_secret_token_12345"
+    # Missing incident -> 404
+    res_404 = api_client.post(
+        "/api/incidents/INC-NONEXISTENT-99999/action",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"action": "CONTINUE_ANYWAY"},
+    )
+    assert res_404.status_code == 404
+    assert res_404.json()["detail"] == "Incident not found"
+
+    # Non-WARN incident (e.g. BLOCK) -> 400
+    inc_id = "INC-AUTH-BLOCK-001"
+    incidents_collection.insert_one({
+        "incident_id": inc_id,
+        "employee_id": "EMP-AUTH-001",
+        "action": "BLOCK",
+        "status": "Open",
+    })
+    try:
+        res_400 = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "CONTINUE_ANYWAY"},
+        )
+        assert res_400.status_code == 400
+        assert "only valid for WARN" in res_400.json()["detail"]
+    finally:
+        incidents_collection.delete_many({"incident_id": inc_id})
+
+
+def test_25_incident_action_invalid_action_rejected():
+    """Action value not in ALLOWED_INCIDENT_ACTIONS is rejected with 400."""
+    token = "agies_ext_valid_secret_token_12345"
+    res = api_client.post(
+        "/api/incidents/INC-FAKE/action",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"action": "UNAUTHORIZED_ACTION"},
+    )
+    assert res.status_code == 400
+    assert "Invalid action" in res.json()["detail"]
+
+
+def test_26_incident_action_admin_csrf_protection_still_enforced():
+    """Cookie-based admin request with untrusted Origin is blocked by CSRF (403); trusted Origin succeeds."""
+    inc_id = "INC-AUTH-WARN-007"
+    _create_test_warn_incident(inc_id, "EMP-AUTH-001")
+    app.dependency_overrides[require_admin] = mock_admin_user
+    try:
+        # 1. Untrusted Origin + Cookie auth -> 403 CSRF verification failed
+        res_csrf = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            headers={"Origin": "http://evil-attacker.example"},
+            json={"action": "CONTINUE_ANYWAY"},
+        )
+        assert res_csrf.status_code == 403
+        assert res_csrf.json()["detail"] == "CSRF verification failed"
+
+        # 2. Trusted Origin + Cookie auth -> 200 OK
+        res_trusted = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            headers={"Origin": "http://localhost:5173"},
+            json={"action": "CONTINUE_ANYWAY"},
+        )
+        assert res_trusted.status_code == 200
+        assert res_trusted.json()["success"] is True
+
+        # 3. Bearer auth from untrusted Origin -> allowed through to Bearer auth
+        token = "agies_ext_valid_secret_token_12345"
+        res_bearer_origin = api_client.post(
+            f"/api/incidents/{inc_id}/action",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Origin": "chrome-extension://abcdefghijklmnop",
+            },
+            json={"action": "WARNING_CANCELLED"},
+        )
+        assert res_bearer_origin.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+        incidents_collection.delete_many({"incident_id": inc_id})
+        audit_logs_collection.delete_many({"incident_id": inc_id})

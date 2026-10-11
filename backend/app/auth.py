@@ -295,3 +295,37 @@ def require_extension_protection(
             detail="Extension protection is disabled",
         )
     return employee
+
+
+def require_admin_or_extension(request: Request) -> Dict[str, Any]:
+    """Authenticate either an active administrator session or a paired extension bearer credential.
+
+    Narrowly scoped for endpoints accessible by either an administrator or a paired extension
+    (such as incident action recording).
+
+    - If an 'Authorization' header is present (non-empty), it MUST be validated strictly as
+      an extension credential via require_extension_auth(request). If invalid, malformed,
+      unpaired, or disabled, it fails closed immediately and NEVER falls back to admin session auth.
+    - If no 'Authorization' header is present, it validates administrator session authentication
+      via require_admin(request).
+    """
+    overrides = getattr(request.app, "dependency_overrides", {})
+    auth_header = request.headers.get("Authorization")
+    if auth_header is not None and auth_header.strip():
+        override_ext = overrides.get(require_extension_auth)
+        employee = override_ext() if override_ext else require_extension_auth(request)
+        return {
+            "actor_type": "extension",
+            "role": "employee",
+            "employee_id": employee["employee_id"],
+            "employee": employee,
+        }
+
+    override_admin = overrides.get(require_admin)
+    admin = override_admin() if override_admin else require_admin(request)
+    return {
+        "actor_type": "admin",
+        "role": "admin",
+        "email": admin.get("email"),
+        "admin": admin,
+    }
