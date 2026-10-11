@@ -1459,6 +1459,21 @@ else:
             _default,
         )
 
+@app.get("/downloads/extension.zip", include_in_schema=False)
+@app.get("/downloads/agiesai-sentinel-extension.zip", include_in_schema=False)
+def download_extension_zip() -> FileResponse:
+    """Serve the downloadable AgiesAI Sentinel Chrome extension package."""
+    if _STATIC_DIR is not None:
+        target = _STATIC_DIR / "downloads" / "extension.zip"
+        if target.is_file():
+            return FileResponse(
+                str(target),
+                media_type="application/zip",
+                filename="extension.zip",
+            )
+    raise HTTPException(status_code=404, detail="Extension package not found")
+
+
 if _STATIC_DIR is not None:
     _assets_dir = _STATIC_DIR / "assets"
     if _assets_dir.is_dir():

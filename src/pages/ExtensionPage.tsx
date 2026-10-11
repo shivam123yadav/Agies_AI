@@ -74,7 +74,7 @@ export function ExtensionPage() {
 
           <div className="flex gap-2">
             <a
-              href="/downloads/agiesai-sentinel-extension.zip"
+              href="/downloads/extension.zip"
               download
               className="btn-primary text-sm"
             >

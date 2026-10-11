@@ -20,9 +20,11 @@ C. DemoPage API-URL tests: verify the TypeScript api.ts logic produces '' (same-
    in a Vite browser build context.
 """
 
+import io
 import os
 from pathlib import Path
 from unittest.mock import patch
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -315,3 +317,55 @@ def test_backend_requirements_contains_all_runtime_deps():
     assert "pymongo" in content
     assert "itsdangerous" in content, "itsdangerous is required by Starlette SessionMiddleware"
     assert "dnspython" in content, "dnspython is required by pymongo for mongodb+srv:// Atlas URIs"
+
+
+def test_download_extension_zip_success(tmp_path):
+    """Existing ZIP returns HTTP 200 with the correct content type and valid ZIP content."""
+    downloads_dir = tmp_path / "downloads"
+    downloads_dir.mkdir(parents=True)
+    zip_path = downloads_dir / "extension.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", '{"name": "test"}')
+
+    with patch("app.main._STATIC_DIR", tmp_path):
+        res = client.get("/downloads/extension.zip")
+        assert res.status_code == 200
+        content_type = res.headers.get("content-type", "")
+        assert "application/zip" in content_type or "application/x-zip" in content_type
+
+        # Verify returned body is valid ZIP content
+        with zipfile.ZipFile(io.BytesIO(res.content)) as parsed_zip:
+            assert "manifest.json" in parsed_zip.namelist()
+
+        # Verify legacy alias also returns the file
+        alias_res = client.get("/downloads/agiesai-sentinel-extension.zip")
+        assert alias_res.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(alias_res.content)) as parsed_alias:
+            assert "manifest.json" in parsed_alias.namelist()
+
+
+def test_download_extension_zip_missing(tmp_path):
+    """Missing ZIP returns HTTP 404."""
+    # Case 1: _STATIC_DIR has no downloads directory or missing extension.zip
+    empty_static_dir = tmp_path / "empty_dist"
+    empty_static_dir.mkdir(parents=True)
+    with patch("app.main._STATIC_DIR", empty_static_dir):
+        res = client.get("/downloads/extension.zip")
+        assert res.status_code == 404
+        assert "not found" in res.json().get("detail", "").lower()
+
+    # Case 2: _STATIC_DIR is None
+    with patch("app.main._STATIC_DIR", None):
+        res = client.get("/downloads/extension.zip")
+        assert res.status_code == 404
+        assert "not found" in res.json().get("detail", "").lower()
+
+
+def test_extension_page_react_download_link():
+    """Verify src/pages/ExtensionPage.tsx links to /downloads/extension.zip."""
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    page_file = repo_root / "src" / "pages" / "ExtensionPage.tsx"
+    assert page_file.is_file(), f"ExtensionPage.tsx not found at {page_file}"
+    content = page_file.read_text(encoding="utf-8")
+    assert 'href="/downloads/extension.zip"' in content
+    assert 'href="/downloads/agiesai-sentinel-extension.zip"' not in content
