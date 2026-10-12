@@ -10,6 +10,7 @@ import {
   getPolicies,
   generatePairingCode,
   revokeExtension,
+  createEmployee,
 } from '../src/lib/api.ts';
 
 // Helper to mock global fetch
@@ -412,5 +413,121 @@ test('11. Revoking extension credential handles errors from backend', async () =
     );
   } finally {
     mock404.restore();
+  }
+});
+
+test('12. createEmployee sends POST /api/employees with payload and credentials: "include"', async () => {
+  const newEmp = {
+    name: 'Maya Lin',
+    email: 'maya.lin@northwind.co',
+    department: 'Security',
+    role: 'Staff Architect',
+  };
+
+  const mock = createMockFetch(async (url, options) => {
+    assert.strictEqual(url, `${API_BASE_URL}/api/employees`);
+    assert.strictEqual(options.method, 'POST');
+    assert.strictEqual(options.credentials, 'include');
+    assert.strictEqual(options.headers['Content-Type'], 'application/json');
+
+    const body = JSON.parse(options.body);
+    assert.strictEqual(body.name, 'Maya Lin');
+    assert.strictEqual(body.email, 'maya.lin@northwind.co');
+    assert.strictEqual(body.department, 'Security');
+    assert.strictEqual(body.role, 'Staff Architect');
+    assert.strictEqual(body.status, 'Active');
+    assert.strictEqual(body.extension_active, true);
+
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        employee: {
+          employee_id: 'EMP-A1B2C3D4',
+          name: 'Maya Lin',
+          email: 'maya.lin@northwind.co',
+          department: 'Security',
+          role: 'Staff Architect',
+          extension_active: true,
+          status: 'Active',
+          incidents: 0,
+          warnings: 0,
+          blocked: 0,
+          risk_level: 'LOW',
+          risk_score: 0,
+        },
+      }),
+    };
+  });
+
+  try {
+    const res = await createEmployee(newEmp);
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.employee.employee_id, 'EMP-A1B2C3D4');
+    assert.strictEqual(res.employee.name, 'Maya Lin');
+    assert.strictEqual(mock.recordedCalls.length, 1);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('13. createEmployee handles duplicate email 409 Conflict error from backend', async () => {
+  const mock409 = createMockFetch(async () => {
+    return {
+      ok: false,
+      status: 409,
+      json: async () => ({ detail: 'An employee with this email already exists' }),
+    };
+  });
+
+  try {
+    await assert.rejects(
+      async () => {
+        await createEmployee({
+          name: 'Duplicate User',
+          email: 'existing@northwind.co',
+          department: 'Engineering',
+          role: 'Developer',
+        });
+      },
+      (err) => {
+        assert(err instanceof Error);
+        assert.strictEqual(err.message, 'An employee with this email already exists');
+        return true;
+      }
+    );
+  } finally {
+    mock409.restore();
+  }
+});
+
+test('14. createEmployee handles 401 unauthenticated session error', async () => {
+  const mock401 = createMockFetch(async () => {
+    return {
+      ok: false,
+      status: 401,
+      json: async () => ({ detail: 'Admin authentication required' }),
+    };
+  });
+
+  try {
+    await assert.rejects(
+      async () => {
+        await createEmployee({
+          name: 'Maya Lin',
+          email: 'maya@northwind.co',
+          department: 'Security',
+          role: 'Engineer',
+        });
+      },
+      (err) => {
+        assert(err instanceof Error);
+        assert.strictEqual(err.message, 'Admin authentication required');
+        return true;
+      }
+    );
+  } finally {
+    mock401.restore();
   }
 });

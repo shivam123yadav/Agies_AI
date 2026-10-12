@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, Users, Puzzle, ShieldCheck, ShieldAlert, RefreshCw, KeyRound } from 'lucide-react';
+import { Search, Users, Puzzle, ShieldCheck, ShieldAlert, RefreshCw, KeyRound, UserPlus, Mail, Building2, Briefcase, User, AlertCircle } from 'lucide-react';
 import { RiskBadge } from '@/components/Risk';
 import { EmptyState } from '@/components/States';
 import { useToast } from '@/components/Toast';
+import { Modal } from '@/components/Modal';
 import { PairingCodeModal } from '@/components/PairingCodeModal';
 import { cx, initials } from '@/lib/risk';
-import { getEmployees } from '@/lib/api';
+import { getEmployees, createEmployee } from '@/lib/api';
 import type { BackendEmployee } from '@/lib/api';
 
 const riskLevels = ['All', 'LOW', 'MEDIUM', 'HIGH'];
@@ -20,6 +21,17 @@ export function EmployeesPage() {
   const [dept, setDept] = useState('All');
   const [risk, setRisk] = useState('All');
   const [ext, setExt] = useState('All');
+
+  // Add Employee modal state
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [department, setDepartment] = useState('');
+  const [role, setRole] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
   const toast = useToast();
 
   const load = async () => {
@@ -31,6 +43,98 @@ export function EmployeesPage() {
       toast.push({ type: 'error', title: 'Unable to load employees', message: error instanceof Error ? error.message : 'Backend unavailable.' });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const validate = () => {
+    const errors: Record<string, string> = {};
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim();
+    const trimmedDept = department.trim();
+    const trimmedRole = role.trim();
+
+    if (!trimmedName) {
+      errors.name = 'Full name is required';
+    } else if (trimmedName.length > 120) {
+      errors.name = 'Name must be 120 characters or fewer';
+    }
+
+    if (!trimmedEmail) {
+      errors.email = 'Email address is required';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      errors.email = 'Please enter a valid email address';
+    } else if (trimmedEmail.length > 160) {
+      errors.email = 'Email must be 160 characters or fewer';
+    }
+
+    if (!trimmedDept) {
+      errors.department = 'Department is required';
+    } else if (trimmedDept.length > 100) {
+      errors.department = 'Department must be 100 characters or fewer';
+    }
+
+    if (!trimmedRole) {
+      errors.role = 'Role / title is required';
+    } else if (trimmedRole.length > 100) {
+      errors.role = 'Role must be 100 characters or fewer';
+    }
+
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const resetForm = () => {
+    setName('');
+    setEmail('');
+    setDepartment('');
+    setRole('');
+    setFieldErrors({});
+    setFormError(null);
+  };
+
+  const handleCreateEmployee = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (submitting) return;
+    setFormError(null);
+
+    if (!validate()) return;
+
+    setSubmitting(true);
+    try {
+      const res = await createEmployee({
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
+        department: department.trim(),
+        role: role.trim(),
+      });
+
+      toast.push({
+        type: 'success',
+        title: 'Employee created',
+        message: `${res.employee.name} has been added to the directory.`,
+      });
+
+      resetForm();
+      setAddModalOpen(false);
+
+      // Refresh employee list
+      await load();
+
+      // Proceed immediately to extension pairing for new employee
+      setPairingEmployee({
+        employee_id: res.employee.employee_id,
+        name: res.employee.name,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create employee.';
+      setFormError(message);
+      toast.push({
+        type: 'error',
+        title: 'Creation failed',
+        message,
+      });
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -67,9 +171,21 @@ export function EmployeesPage() {
           <h2 className="text-base font-semibold text-ink-50">Employee Directory</h2>
           <p className="text-xs text-ink-400 mt-0.5">Identity and security activity from the Sentinel backend.</p>
         </div>
-        <button className="btn-secondary text-sm" onClick={() => void load()} disabled={loading}>
-          <RefreshCw className={cx('w-4 h-4', loading && 'animate-spin')} /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button className="btn-secondary text-sm" onClick={() => void load()} disabled={loading}>
+            <RefreshCw className={cx('w-4 h-4', loading && 'animate-spin')} /> Refresh
+          </button>
+          <button
+            type="button"
+            className="btn-primary text-sm inline-flex items-center gap-2"
+            onClick={() => {
+              resetForm();
+              setAddModalOpen(true);
+            }}
+          >
+            <UserPlus className="w-4 h-4" /> Add Employee
+          </button>
+        </div>
       </div>
 
       <div className="surface p-4">
@@ -161,6 +277,163 @@ export function EmployeesPage() {
         onClose={() => setPairingEmployee(null)}
         employee={pairingEmployee}
       />
+
+      <Modal
+        open={addModalOpen}
+        onClose={() => {
+          if (!submitting) {
+            setAddModalOpen(false);
+            resetForm();
+          }
+        }}
+        title="Add Employee"
+        size="md"
+      >
+        <form onSubmit={handleCreateEmployee} className="space-y-4">
+          {formError && (
+            <div className="p-3 rounded-lg border border-danger/40 bg-risk-highSoft flex items-start gap-2.5 text-danger text-xs">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold">Creation Error</p>
+                <p className="mt-0.5 leading-relaxed">{formError}</p>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="label" htmlFor="new-emp-name">Full Name *</label>
+            <div className="relative">
+              <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-500" />
+              <input
+                id="new-emp-name"
+                type="text"
+                className={cx('input pl-10', fieldErrors.name && 'border-danger focus:border-danger')}
+                placeholder="e.g. Maya Lin"
+                value={name}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  if (fieldErrors.name) setFieldErrors((prev) => ({ ...prev, name: '' }));
+                }}
+                disabled={submitting}
+                maxLength={120}
+                required
+              />
+            </div>
+            {fieldErrors.name && <p className="text-xs text-danger mt-1">{fieldErrors.name}</p>}
+          </div>
+
+          <div>
+            <label className="label" htmlFor="new-emp-email">Work Email *</label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-500" />
+              <input
+                id="new-emp-email"
+                type="email"
+                className={cx('input pl-10', fieldErrors.email && 'border-danger focus:border-danger')}
+                placeholder="e.g. maya.lin@northwind.co"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: '' }));
+                }}
+                disabled={submitting}
+                maxLength={160}
+                required
+              />
+            </div>
+            {fieldErrors.email && <p className="text-xs text-danger mt-1">{fieldErrors.email}</p>}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="label" htmlFor="new-emp-dept">Department *</label>
+              <div className="relative">
+                <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-500" />
+                <input
+                  id="new-emp-dept"
+                  type="text"
+                  list="dept-options"
+                  className={cx('input pl-10', fieldErrors.department && 'border-danger focus:border-danger')}
+                  placeholder="e.g. Security"
+                  value={department}
+                  onChange={(e) => {
+                    setDepartment(e.target.value);
+                    if (fieldErrors.department) setFieldErrors((prev) => ({ ...prev, department: '' }));
+                  }}
+                  disabled={submitting}
+                  maxLength={100}
+                  required
+                />
+                <datalist id="dept-options">
+                  {departments.map((d) => (
+                    <option key={d} value={d} />
+                  ))}
+                </datalist>
+              </div>
+              {fieldErrors.department && <p className="text-xs text-danger mt-1">{fieldErrors.department}</p>}
+            </div>
+
+            <div>
+              <label className="label" htmlFor="new-emp-role">Role / Title *</label>
+              <div className="relative">
+                <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-500" />
+                <input
+                  id="new-emp-role"
+                  type="text"
+                  className={cx('input pl-10', fieldErrors.role && 'border-danger focus:border-danger')}
+                  placeholder="e.g. Staff Architect"
+                  value={role}
+                  onChange={(e) => {
+                    setRole(e.target.value);
+                    if (fieldErrors.role) setFieldErrors((prev) => ({ ...prev, role: '' }));
+                  }}
+                  disabled={submitting}
+                  maxLength={100}
+                  required
+                />
+              </div>
+              {fieldErrors.role && <p className="text-xs text-danger mt-1">{fieldErrors.role}</p>}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-ink-800 bg-ink-850/60 p-3 text-xs text-ink-400">
+            <p className="leading-relaxed">
+              Upon saving, you can generate a one-time pairing code to connect this employee&apos;s Chrome extension.
+            </p>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <button
+              type="button"
+              className="btn-secondary text-sm"
+              onClick={() => {
+                setAddModalOpen(false);
+                resetForm();
+              }}
+              disabled={submitting}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="btn-primary text-sm inline-flex items-center gap-2"
+              disabled={submitting}
+            >
+              {submitting ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Saving Employee…</span>
+                </>
+              ) : (
+                <>
+                  <UserPlus className="w-4 h-4" />
+                  <span>Save & Pair Extension</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

@@ -279,6 +279,34 @@ export function getEmployee(id: string) {
   return request<EmployeeResponse>(`/api/employees/${encodeURIComponent(id)}`);
 }
 
+export interface CreateEmployeeRequest {
+  name: string;
+  email: string;
+  department: string;
+  role: string;
+  status?: 'Active' | 'Disabled';
+  extension_active?: boolean;
+}
+
+export interface CreateEmployeeResponse {
+  success: boolean;
+  employee: BackendEmployee;
+}
+
+export function createEmployee(data: CreateEmployeeRequest) {
+  return request<CreateEmployeeResponse>('/api/employees', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: data.name,
+      email: data.email,
+      department: data.department,
+      role: data.role,
+      status: data.status || 'Active',
+      extension_active: data.extension_active !== undefined ? data.extension_active : true,
+    }),
+  });
+}
+
 export interface PairingCodeResponse {
   success: boolean;
   employee_id: string;
