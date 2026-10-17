@@ -3,7 +3,7 @@ import { AppShell } from '@/components/AppShell';
 import { ToastProvider } from '@/components/Toast';
 import { AuthProvider } from '@/context/AuthContext';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
-import { LandingPage } from '@/pages/LandingPage';
+import LandingPage from '@/pages/LandingPage';
 import { DemoPage } from '@/pages/DemoPage';
 import { LoginPage, RegisterPage } from '@/pages/AuthPages';
 import { DashboardPage } from '@/pages/DashboardPage';
