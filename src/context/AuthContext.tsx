@@ -50,10 +50,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
-    // Only clear local state if server successfully invalidates session
-    await logoutAdmin();
-    setUser(null);
-    setIsAuthenticated(false);
+    try {
+      await logoutAdmin();
+    } finally {
+      setUser(null);
+      setIsAuthenticated(false);
+    }
   }, []);
 
   return (

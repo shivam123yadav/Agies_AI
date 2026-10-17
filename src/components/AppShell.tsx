@@ -136,13 +136,14 @@ export function AppShell() {
     try {
       await logout();
       toast.push({ type: 'success', title: 'Signed out', message: 'You have been logged out.' });
-      navigate('/');
+      navigate('/', { replace: true });
     } catch (error) {
       toast.push({
         type: 'error',
         title: 'Sign out failed',
         message: error instanceof Error ? error.message : 'Failed to invalidate server session.',
       });
+      navigate('/', { replace: true });
     } finally {
       setIsLoggingOut(false);
     }
