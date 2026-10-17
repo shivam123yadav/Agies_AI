@@ -136,7 +136,7 @@ export function AppShell() {
     try {
       await logout();
       toast.push({ type: 'success', title: 'Signed out', message: 'You have been logged out.' });
-      navigate('/login');
+      navigate('/');
     } catch (error) {
       toast.push({
         type: 'error',
