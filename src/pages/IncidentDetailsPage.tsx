@@ -21,6 +21,7 @@ import { DetectionPipeline } from '@/components/DetectionPipeline';
 import { useToast } from '@/components/Toast';
 import { cx } from '@/lib/risk';
 import { getIncident, updateIncidentStatus, type BackendIncident } from '@/lib/api';
+import { formatTimestamp } from '@/lib/time';
 
 function categoryFromType(type?: string): string {
   switch (type) {
@@ -33,11 +34,6 @@ function categoryFromType(type?: string): string {
     case 'DATABASE_URL': return 'Database Information';
     default: return 'Other';
   }
-}
-
-function formatTimestamp(timestamp: string) {
-  const date = new Date(timestamp);
-  return Number.isNaN(date.getTime()) ? timestamp : date.toLocaleString();
 }
 
 export function IncidentDetailsPage() {

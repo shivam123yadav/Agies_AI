@@ -77,6 +77,7 @@ MEDIUM_RISK_CONTEXTS = {
     "external_ai": (
         re.compile(
             r"\b(?:chatgpt|gemini|claude|copilot|perplexity"
+            r"|deepseek|grok"
             r"|ai\s+assistant|external\s+ai)\b"
         ),
         20,
@@ -205,6 +206,7 @@ def analyze_context(
 
         if re.search(
             r"\b(?:chatgpt|gemini|claude|copilot|perplexity"
+            r"|deepseek|grok"
             r"|ai\s+assistant|external\s+ai)\b",
             normalized_text,
         ):

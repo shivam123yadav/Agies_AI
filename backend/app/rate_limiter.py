@@ -40,6 +40,20 @@ def get_rate_limit_config() -> dict:
     }
 
 
+# Pairing Rate Limit Policy: 5 failed attempts per IP in 15 mins
+DEFAULT_PAIRING_IP_MAX_ATTEMPTS = 5
+DEFAULT_PAIRING_WINDOW_SECONDS = 900  # 15 minutes
+DEFAULT_PAIRING_LOCKOUT_SECONDS = 900  # 15 minutes
+
+
+def get_pairing_rate_limit_config() -> dict:
+    return {
+        "ip_max_attempts": _parse_int_env("PAIRING_RATE_LIMIT_IP_MAX_ATTEMPTS", DEFAULT_PAIRING_IP_MAX_ATTEMPTS),
+        "window_seconds": _parse_int_env("PAIRING_RATE_LIMIT_WINDOW_SECONDS", DEFAULT_PAIRING_WINDOW_SECONDS),
+        "lockout_seconds": _parse_int_env("PAIRING_RATE_LIMIT_LOCKOUT_SECONDS", DEFAULT_PAIRING_LOCKOUT_SECONDS),
+    }
+
+
 def get_trusted_proxies() -> Set[str]:
     raw = os.getenv("TRUSTED_PROXIES", "").strip()
     if not raw:
@@ -305,3 +319,75 @@ def reset_login_rate_limit(request: Request, email: str) -> None:
     account = _normalize_account(email)
     if account:
         login_rate_limits_collection.delete_one({"key": f"account:{account}"})
+
+
+def check_pairing_rate_limit(
+    request: Request,
+    now: Optional[datetime] = None,
+) -> None:
+    """Enforce rate limits on extension pairing attempts by client IP.
+
+    Checks IP limit prior to pairing code hash verification and database query.
+    Raises HTTP 429 Too Many Requests with Retry-After header if locked out or limit exceeded.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    config = get_pairing_rate_limit_config()
+    client_ip = get_client_ip(request)
+    ip_key = f"pair_ip:{client_ip}"
+
+    retry_after = _check_key_limit(
+        ip_key,
+        config["ip_max_attempts"],
+        config["window_seconds"],
+        config["lockout_seconds"],
+        now,
+    )
+
+    if retry_after is not None and retry_after > 0:
+        logger.warning(
+            "Extension pairing rate limit exceeded for ip=%s (retry_after=%ds)",
+            client_ip,
+            retry_after,
+        )
+        audit_logs_collection.insert_one(
+            {
+                "timestamp": now,
+                "event": "EXTENSION_PAIRING_RATE_LIMITED",
+                "client_ip": client_ip,
+                "retry_after": retry_after,
+            }
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many pairing attempts. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
+def record_pairing_failure(
+    request: Request,
+    now: Optional[datetime] = None,
+) -> None:
+    """Record an unsuccessful extension pairing attempt for rate limiting."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    config = get_pairing_rate_limit_config()
+    client_ip = get_client_ip(request)
+    ip_key = f"pair_ip:{client_ip}"
+
+    _record_key_failure(
+        ip_key,
+        "pair_ip",
+        config["ip_max_attempts"],
+        config["window_seconds"],
+        config["lockout_seconds"],
+        now,
+    )
+

@@ -14,6 +14,7 @@ import { RiskBadge, ActionBadge, StatusBadge } from '@/components/Risk';
 import { EmptyState } from '@/components/States';
 import { cx } from '@/lib/risk';
 import { getIncidents, type BackendIncident } from '@/lib/api';
+import { formatTimestamp } from '@/lib/time';
 
 type SortKey = 'timestamp' | 'riskScore' | 'id';
 
@@ -268,12 +269,6 @@ export function IncidentsPage() {
       </div>
     </div>
   );
-}
-
-function formatTimestamp(timestamp: string) {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return timestamp;
-  return date.toLocaleString();
 }
 
 function Th({ children, onClick, active, dir }: { children: React.ReactNode; onClick: () => void; active: boolean; dir: 'asc' | 'desc' }) {

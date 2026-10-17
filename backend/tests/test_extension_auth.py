@@ -921,3 +921,44 @@ def test_26_incident_action_admin_csrf_protection_still_enforced():
         app.dependency_overrides.clear()
         incidents_collection.delete_many({"incident_id": inc_id})
         audit_logs_collection.delete_many({"incident_id": inc_id})
+
+
+def test_21_detect_all_seven_platforms_accepted():
+    """TEST 21: Verify all seven supported platform identifiers are accepted on /api/detect."""
+    token = "agies_ext_valid_secret_token_12345"  # EMP-AUTH-001
+    platforms = [
+        "ChatGPT",
+        "Gemini",
+        "Claude",
+        "Copilot",
+        "Perplexity",
+        "DeepSeek",
+        "Grok",
+    ]
+
+    for plat in platforms:
+        res = api_client.post(
+            "/api/detect",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"text": f"Analyze this standard query on {plat}.", "platform": plat},
+        )
+        assert res.status_code == 200, f"Failed for platform {plat}"
+        data = res.json()
+        assert data["success"] is True
+        assert data["platform"] == plat, f"Expected {plat}, got {data['platform']}"
+        assert data["employee_id"] == "EMP-AUTH-001"
+
+
+def test_22_detect_unknown_platform_fallback_to_chatgpt():
+    """TEST 22: Unrecognized or invalid platform identifiers fall back safely to ChatGPT."""
+    token = "agies_ext_valid_secret_token_12345"  # EMP-AUTH-001
+    res = api_client.post(
+        "/api/detect",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"text": "Query for unknown engine.", "platform": "UnsupportedAIEngine"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["platform"] == "ChatGPT", "Unknown platform must safely default to ChatGPT"
+

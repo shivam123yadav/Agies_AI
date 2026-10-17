@@ -35,7 +35,9 @@ from app.csrf import (
 )
 from app.rate_limiter import (
     check_login_rate_limit,
+    check_pairing_rate_limit,
     record_login_failure,
+    record_pairing_failure,
     reset_login_rate_limit,
 )
 from app.config import (
@@ -190,7 +192,15 @@ class PolicyStatusRequest(BaseModel):
 
 ALLOWED_STATUSES = {"Open", "Acknowledged", "Resolved"}
 ALLOWED_INCIDENT_ACTIONS = {"CONTINUE_ANYWAY", "WARNING_CANCELLED"}
-ALLOWED_PLATFORMS = {"ChatGPT", "Gemini", "Claude", "Copilot", "Perplexity"}
+ALLOWED_PLATFORMS = {
+    "ChatGPT",
+    "Gemini",
+    "Claude",
+    "Copilot",
+    "Perplexity",
+    "DeepSeek",
+    "Grok",
+}
 
 
 class DetectionRuleRequest(BaseModel):
@@ -260,9 +270,14 @@ def _normalize_extension_state(raw) -> dict:
 
 
 def _to_utc_datetime(val) -> datetime | None:
-    """Safely convert datetime/ISO string/None to timezone-aware UTC datetime."""
+    """Safely convert datetime/ISO string/timestamp/None to timezone-aware UTC datetime."""
     if val is None:
         return None
+    if isinstance(val, (int, float)):
+        try:
+            return datetime.fromtimestamp(val, tz=timezone.utc)
+        except Exception:
+            return None
     if isinstance(val, datetime):
         if val.tzinfo is None or val.tzinfo.utcoffset(val) is None:
             return val.replace(tzinfo=timezone.utc)
@@ -276,6 +291,28 @@ def _to_utc_datetime(val) -> datetime | None:
         except Exception:
             return None
     return None
+
+
+def _format_utc_iso(val) -> str | None:
+    """Format a datetime, ISO string, or timestamp to an explicit UTC ISO 8601 string ending with Z."""
+    if val is None:
+        return None
+    dt = _to_utc_datetime(val)
+    if dt is None:
+        return str(val) if val is not None else None
+    if dt.microsecond == 0:
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _serialize_incident(incident: dict | None) -> dict | None:
+    """Serialize an incident document so its timestamp is always in explicit UTC ISO 8601 with Z."""
+    if not incident:
+        return incident
+    data = dict(incident)
+    if "timestamp" in data and data["timestamp"] is not None:
+        data["timestamp"] = _format_utc_iso(data["timestamp"])
+    return data
 
 
 DEFAULT_EMPLOYEES = [
@@ -487,7 +524,7 @@ def get_incidents(limit: int = 100, _admin: dict = Depends(require_admin)):
         .sort("timestamp", -1)
         .limit(limit)
     )
-    return {"success": True, "count": len(incidents), "incidents": incidents}
+    return {"success": True, "count": len(incidents), "incidents": [_serialize_incident(inc) for inc in incidents]}
 
 
 @app.get("/api/incidents/{incident_id}")
@@ -497,7 +534,7 @@ def get_incident(incident_id: str, _admin: dict = Depends(require_admin)):
     )
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    return {"success": True, "incident": incident}
+    return {"success": True, "incident": _serialize_incident(incident)}
 
 
 @app.patch("/api/incidents/{incident_id}/status")
@@ -537,7 +574,7 @@ def update_incident_status(
     updated = incidents_collection.find_one(
         {"incident_id": incident_id}, {"_id": 0}
     )
-    return {"success": True, "incident": updated}
+    return {"success": True, "incident": _serialize_incident(updated)}
 
 @app.post("/api/incidents/{incident_id}/action")
 def record_incident_action(
@@ -822,9 +859,10 @@ def get_employee(employee_id: str, _admin: dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="Employee not found")
     item = _employee_payload(employee)
     item["stats"] = _employee_stats(employee_id)
-    item["incidents_detail"] = list(
-        incidents_collection.find({"employee_id": employee_id}, {"_id": 0}).sort("timestamp", -1).limit(50)
-    )
+    item["incidents_detail"] = [
+        _serialize_incident(inc)
+        for inc in incidents_collection.find({"employee_id": employee_id}, {"_id": 0}).sort("timestamp", -1).limit(50)
+    ]
     return {"success": True, "employee": item}
 
 
@@ -1118,13 +1156,16 @@ def revoke_extension_credential(
 
 
 @app.post("/api/extension/pair")
-def pair_extension(request: ExtensionPairRequest):
+def pair_extension(request: ExtensionPairRequest, http_request: Request = None):
     """STEP 3: Validate and consume pairing code atomically, issue extension credential.
 
     Consumes code atomically in MongoDB, derives employee identity,
     generates bearer credential, updates employee extension state (paired=True,
     credential_hash=SHA256(credential)), and returns plaintext credential ONCE.
     """
+    if http_request is not None:
+        check_pairing_rate_limit(http_request)
+
     normalized_code = normalize_pairing_code(request.code)
     code_hash = hash_pairing_code(normalized_code)
     now = datetime.now(timezone.utc)
@@ -1141,6 +1182,8 @@ def pair_extension(request: ExtensionPairRequest):
     )
 
     if not pairing_doc:
+        if http_request is not None:
+            record_pairing_failure(http_request, now)
         raise HTTPException(
             status_code=400,
             detail="Invalid or expired pairing code",
@@ -1149,6 +1192,8 @@ def pair_extension(request: ExtensionPairRequest):
     employee_id = pairing_doc.get("employee_id")
     employee = employees_collection.find_one({"employee_id": employee_id})
     if not employee or employee.get("status") != "Active":
+        if http_request is not None:
+            record_pairing_failure(http_request, now)
         raise HTTPException(
             status_code=400,
             detail="Invalid or expired pairing code",
@@ -1162,6 +1207,8 @@ def pair_extension(request: ExtensionPairRequest):
     if revoked_at is not None and (
         code_created_at is None or code_created_at <= revoked_at
     ):
+        if http_request is not None:
+            record_pairing_failure(http_request, now)
         raise HTTPException(
             status_code=400,
             detail="Invalid or expired pairing code",
@@ -1514,7 +1561,14 @@ def get_audit_log(limit: int = 100, _admin: dict = Depends(require_admin)):
         .sort("timestamp", -1)
         .limit(limit)
     )
-    return {"success": True, "count": len(logs), "logs": logs}
+    return {
+        "success": True,
+        "count": len(logs),
+        "logs": [
+            {**log, "timestamp": _format_utc_iso(log.get("timestamp"))}
+            for log in logs
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
