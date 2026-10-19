@@ -369,3 +369,24 @@ def test_extension_page_react_download_link():
     content = page_file.read_text(encoding="utf-8")
     assert 'href="/downloads/extension.zip"' in content
     assert 'href="/downloads/agiesai-sentinel-extension.zip"' not in content
+
+
+def test_developer_jpg_served_when_present(tmp_path):
+    """When developer.jpg exists in _STATIC_DIR, GET /developer.jpg returns 200 with the image."""
+    img_path = tmp_path / "developer.jpg"
+    img_path.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00")
+
+    with patch("app.main._STATIC_DIR", tmp_path):
+        res = client.get("/developer.jpg")
+        assert res.status_code == 200
+        assert res.content == b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
+
+
+def test_developer_jpg_missing_returns_404(tmp_path):
+    """When developer.jpg is missing from _STATIC_DIR, GET /developer.jpg returns 404."""
+    empty_dir = tmp_path / "empty_dist"
+    empty_dir.mkdir(parents=True)
+    with patch("app.main._STATIC_DIR", empty_dir):
+        res = client.get("/developer.jpg")
+        assert res.status_code == 404
+

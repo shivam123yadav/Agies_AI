@@ -1634,11 +1634,11 @@ if _STATIC_DIR is not None:
         app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="spa-assets")
 
     # Individual files that Vite copies to the root of the dist directory
-    # (vite.svg, favicon.ico, robots.txt, …).  We enumerate them explicitly
+    # (developer.jpg, favicon.ico, robots.txt, …).  We enumerate them explicitly
     # so that the catch-all below never intercepts /api/* paths.
-    _ROOT_STATIC_EXTS = {".svg", ".ico", ".png", ".txt", ".webmanifest", ".json"}
+    _ROOT_STATIC_EXTS = {".svg", ".ico", ".png", ".jpg", ".jpeg", ".webp", ".txt", ".webmanifest", ".json"}
 
-    @app.get("/vite.svg", include_in_schema=False)
+    @app.get("/developer.jpg", include_in_schema=False)
     @app.get("/favicon.ico", include_in_schema=False)
     @app.get("/robots.txt", include_in_schema=False)
     def _root_static_file(request: Request) -> FileResponse:
@@ -1667,6 +1667,9 @@ if _STATIC_DIR is not None:
             raise HTTPException(status_code=404, detail="Not found")
         # Reject requests for missing static-looking paths (e.g. /icon.png)
         if "." in full_path.rsplit("/", 1)[-1]:
+            candidate = (_STATIC_DIR / full_path).resolve()
+            if candidate.is_file() and candidate.is_relative_to(_STATIC_DIR.resolve()):
+                return FileResponse(str(candidate))
             raise HTTPException(status_code=404, detail="Not found")
         index = _STATIC_DIR / "index.html"  # type: ignore[operator]
         if not index.is_file():
