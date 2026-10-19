@@ -433,3 +433,189 @@ export function updateDetectionRule(
     },
   );
 }
+
+export interface DemoDetectionResponse {
+  success: boolean;
+  demo?: boolean;
+  incident_id?: string | number | null;
+  employee_id?: string | null;
+  employee_name?: string | null;
+  platform?: string;
+  detection: {
+    detected: boolean;
+    finding_count: number;
+    findings: {
+      type: string;
+      count: number;
+      masked_examples: string[];
+    }[];
+  };
+  context: {
+    context_level: 'LOW' | 'MEDIUM' | 'HIGH';
+    score_modifier: number;
+    signals: {
+      signal: string;
+      category: string;
+      impact: number;
+    }[];
+  };
+  risk: {
+    score: number;
+    level: 'LOW' | 'MEDIUM' | 'HIGH';
+    context_modifier: number;
+    reasons: {
+      type: string;
+      weight: number;
+      count: number;
+      contribution: number;
+    }[];
+  };
+  policy: {
+    decision: 'ALLOW' | 'WARN' | 'BLOCK';
+    policy: string;
+    message: string;
+  };
+}
+
+export const PREDEFINED_DEMO_RESULTS: Record<string, DemoDetectionResponse> = {
+  safe: {
+    success: true,
+    demo: true,
+    incident_id: null,
+    employee_id: 'EMP-DEMO-PUBLIC',
+    employee_name: 'Demo Visitor',
+    platform: 'ChatGPT',
+    detection: {
+      detected: false,
+      finding_count: 0,
+      findings: [],
+    },
+    context: {
+      context_level: 'LOW',
+      score_modifier: 0,
+      signals: [],
+    },
+    risk: {
+      score: 0,
+      level: 'LOW',
+      context_modifier: 0,
+      reasons: [],
+    },
+    policy: {
+      decision: 'ALLOW',
+      policy: 'Standard Data Usage Policy',
+      message: 'No sensitive data detected. Request allowed.',
+    },
+  },
+  warning: {
+    success: true,
+    demo: true,
+    incident_id: 'DEMO-INC-WARN',
+    employee_id: 'EMP-DEMO-PUBLIC',
+    employee_name: 'Demo Visitor',
+    platform: 'ChatGPT',
+    detection: {
+      detected: false,
+      finding_count: 0,
+      findings: [],
+    },
+    context: {
+      context_level: 'HIGH',
+      score_modifier: 55,
+      signals: [
+        { signal: 'financial_information', category: 'Context', impact: 20 },
+        { signal: 'confidential_information', category: 'Context', impact: 35 },
+      ],
+    },
+    risk: {
+      score: 55,
+      level: 'MEDIUM',
+      context_modifier: 55,
+      reasons: [
+        { type: 'CONTEXT_RISK', weight: 55, count: 1, contribution: 55 },
+      ],
+    },
+    policy: {
+      decision: 'WARN',
+      policy: 'Restricted Financial & Internal Data Policy',
+      message: 'Potential business-sensitive information detected. Review before submitting.',
+    },
+  },
+  blocked: {
+    success: true,
+    demo: true,
+    incident_id: 'DEMO-INC-BLOCK',
+    employee_id: 'EMP-DEMO-PUBLIC',
+    employee_name: 'Demo Visitor',
+    platform: 'ChatGPT',
+    detection: {
+      detected: true,
+      finding_count: 1,
+      findings: [
+        {
+          type: 'API_KEY',
+          count: 1,
+          masked_examples: ['sk-live••••••••••••••••'],
+        },
+      ],
+    },
+    context: {
+      context_level: 'HIGH',
+      score_modifier: 35,
+      signals: [
+        { signal: 'production_environment', category: 'Context', impact: 20 },
+        { signal: 'deployment', category: 'Context', impact: 15 },
+      ],
+    },
+    risk: {
+      score: 95,
+      level: 'HIGH',
+      context_modifier: 35,
+      reasons: [
+        { type: 'API_KEY', weight: 60, count: 1, contribution: 60 },
+        { type: 'CONTEXT_RISK', weight: 35, count: 1, contribution: 35 },
+      ],
+    },
+    policy: {
+      decision: 'BLOCK',
+      policy: 'Production Credential Leak Prevention Policy',
+      message: 'Critical API credential detected in prompt targeting external AI tool. Blocked by policy.',
+    },
+  },
+};
+
+export async function runDetectionDemo(
+  text: string,
+  scenario?: 'safe' | 'warning' | 'blocked',
+): Promise<DemoDetectionResponse> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/demo/detect`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        text,
+        scenario,
+      }),
+    });
+
+    if (response.ok) {
+      return (await response.json()) as DemoDetectionResponse;
+    }
+  } catch {
+    // Backend demo endpoint unreachable; fall back gracefully to synthetic examples
+  }
+
+  // Predefined synthetic fallback ensures public demo never crashes
+  if (scenario && PREDEFINED_DEMO_RESULTS[scenario]) {
+    return PREDEFINED_DEMO_RESULTS[scenario];
+  }
+  if (text.includes('sk-live') || text.toLowerCase().includes('api key')) {
+    return PREDEFINED_DEMO_RESULTS.blocked;
+  }
+  if (text.toLowerCase().includes('financial') || text.toLowerCase().includes('confidential')) {
+    return PREDEFINED_DEMO_RESULTS.warning;
+  }
+  return PREDEFINED_DEMO_RESULTS.safe;
+}

@@ -19,7 +19,7 @@ import { DetectionPipeline } from '@/components/DetectionPipeline';
 import { PrivacyNotice } from '@/components/PrivacyNotice';
 import { useToast } from '@/components/Toast';
 import { cx } from '@/lib/risk';
-import { API_BASE_URL } from '@/lib/api';
+import { runDetectionDemo, type DemoDetectionResponse } from '@/lib/api';
 
 type Scenario = 'safe' | 'warning' | 'blocked';
 
@@ -48,49 +48,7 @@ const scenarios: Record<Scenario, ScenarioDef> = {
   },
 };
 
-interface ApiResponse {
-  success: boolean;
-
-  detection: {
-    detected: boolean;
-    finding_count: number;
-    findings: {
-      type: string;
-      count: number;
-      masked_examples: string[];
-    }[];
-  };
-
-  context: {
-    context_level: 'LOW' | 'MEDIUM' | 'HIGH';
-    score_modifier: number;
-    signals: {
-      signal: string;
-      category: string;
-      impact: number;
-    }[];
-  };
-
-  risk: {
-    score: number;
-    level: 'LOW' | 'MEDIUM' | 'HIGH';
-    context_modifier: number;
-    reasons: {
-      type: string;
-      weight: number;
-      count: number;
-      contribution: number;
-    }[];
-  };
-
-  policy: {
-    decision: 'ALLOW' | 'WARN' | 'BLOCK';
-    policy: string;
-    message: string;
-  };
-
-  incident_id?: string | number;
-}
+type ApiResponse = DemoDetectionResponse;
 
 type Phase = 'idle' | 'scanning' | 'result';
 
@@ -167,46 +125,23 @@ export function DemoPage() {
   };
 
   /*
-   * Real AgiesAI backend call
+   * AgiesAI Demo analysis call
    */
   const analyzeWithBackend = async (
     text: string,
+    scenarioName?: Scenario,
   ): Promise<ApiResponse | null> => {
     setIsAnalyzing(true);
     setApiError(null);
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/detect`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            text,
-          }),
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Backend returned HTTP ${response.status}`,
-        );
-      }
-
-      const data: ApiResponse = await response.json();
-
+      const data = await runDetectionDemo(text, scenarioName);
       setApiResult(data);
-
       return data;
-    } catch (error) {
-      console.error('AgiesAI backend error:', error);
-
+    } catch {
       setApiError(
-        'Unable to connect to the AgiesAI security engine. The backend may be unavailable.',
+        'Unable to complete demonstration analysis. Please try selecting a scenario again.',
       );
-
       return null;
     } finally {
       setIsAnalyzing(false);
@@ -214,7 +149,7 @@ export function DemoPage() {
   };
 
   /*
-   * Run visual pipeline + real backend analysis
+   * Run visual pipeline + demo analysis
    */
   const runScan = async (selectedScenario: Scenario) => {
     clearTimers();
@@ -235,6 +170,7 @@ export function DemoPage() {
 
     const result = await analyzeWithBackend(
       scenarios[selectedScenario].input,
+      selectedScenario,
     );
 
     if (!result) {

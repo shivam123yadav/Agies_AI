@@ -88,6 +88,21 @@ def test_post_api_detect_without_auth_returns_json():
     assert "application/json" in content_type
 
 
+def test_post_api_demo_detect_public_access():
+    """/api/demo/detect is a public, restricted demo endpoint returning synthetic results without auth."""
+    res = client.post(
+        "/api/demo/detect",
+        json={"scenario": "safe", "text": "Help me create a professional meeting agenda."},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body.get("success") is True
+    assert body.get("demo") is True
+    assert body.get("policy", {}).get("decision") == "ALLOW"
+    assert body.get("employee_id") == "EMP-DEMO-PUBLIC"
+
+
+
 def test_root_returns_json_sentinel_name():
     """GET / is an API route returning the sentinel name — not an SPA page."""
     res = client.get("/")

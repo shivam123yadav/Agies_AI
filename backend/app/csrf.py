@@ -15,6 +15,7 @@ CSRF_PROTECTED_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
 CSRF_EXEMPT_PATHS = frozenset({
     "/api/extension/pair",
     "/api/detect",
+    "/api/demo/detect",
 })
 
 DEFAULT_DEV_TRUSTED_ORIGINS = frozenset({

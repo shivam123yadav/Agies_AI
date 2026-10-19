@@ -56,9 +56,12 @@ def ensure_default_policies() -> None:
 
 
 def _active_policies() -> list[dict[str, Any]]:
-    policies = list(policies_collection.find({"status": "Active"}, {"_id": 0}))
-    policies.sort(key=lambda p: (p.get("risk_min", 0), p.get("risk_max", 100)))
-    return policies
+    try:
+        policies = list(policies_collection.find({"status": "Active"}, {"_id": 0}))
+        policies.sort(key=lambda p: (p.get("risk_min", 0), p.get("risk_max", 100)))
+        return policies
+    except Exception:
+        return [p for p in DEFAULT_POLICIES if p.get("status") == "Active"]
 
 
 def _risk_policy(score: int) -> dict[str, Any] | None:

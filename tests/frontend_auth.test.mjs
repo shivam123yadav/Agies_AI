@@ -11,6 +11,8 @@ import {
   generatePairingCode,
   revokeExtension,
   createEmployee,
+  runDetectionDemo,
+  PREDEFINED_DEMO_RESULTS,
 } from '../src/lib/api.ts';
 
 // Helper to mock global fetch
@@ -531,3 +533,108 @@ test('14. createEmployee handles 401 unauthenticated session error', async () =>
     mock401.restore();
   }
 });
+
+test('15. Landing page demo calls public /api/demo/detect instead of protected /api/detect', async () => {
+  const mock = createMockFetch(async (url, options) => {
+    assert.strictEqual(url, `${API_BASE_URL}/api/demo/detect`);
+    assert.strictEqual(options.method, 'POST');
+    assert.strictEqual(options.headers['Content-Type'], 'application/json');
+    const body = JSON.parse(options.body);
+    assert.strictEqual(body.scenario, 'safe');
+
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        demo: true,
+        incident_id: null,
+        employee_id: 'EMP-DEMO-PUBLIC',
+        platform: 'ChatGPT',
+        detection: { detected: false, finding_count: 0, findings: [] },
+        context: { context_level: 'LOW', score_modifier: 0, signals: [] },
+        risk: { score: 0, level: 'LOW', context_modifier: 0, reasons: [] },
+        policy: { decision: 'ALLOW', policy: 'Standard Data Usage Policy', message: 'No sensitive data detected.' },
+      }),
+    };
+  });
+
+  try {
+    const result = await runDetectionDemo('Help me create a professional meeting agenda.', 'safe');
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.demo, true);
+    assert.strictEqual(result.policy.decision, 'ALLOW');
+    assert.strictEqual(mock.recordedCalls.length, 1);
+    assert.strictEqual(mock.recordedCalls[0].url, `${API_BASE_URL}/api/demo/detect`);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('16. Landing page demo gracefully falls back to predefined synthetic examples if backend is unreachable', async () => {
+  const mock = createMockFetch(async () => {
+    throw new Error('Failed to fetch (backend offline)');
+  });
+
+  try {
+    const resultSafe = await runDetectionDemo('Help me create a professional meeting agenda.', 'safe');
+    assert.strictEqual(resultSafe.success, true);
+    assert.strictEqual(resultSafe.policy.decision, 'ALLOW');
+    assert.strictEqual(resultSafe.risk.score, 0);
+
+    const resultWarn = await runDetectionDemo('Please send this internal financial information', 'warning');
+    assert.strictEqual(resultWarn.success, true);
+    assert.strictEqual(resultWarn.policy.decision, 'WARN');
+    assert.strictEqual(resultWarn.risk.level, 'MEDIUM');
+
+    const resultBlock = await runDetectionDemo('Send this production API key: sk-live123456789012345678', 'blocked');
+    assert.strictEqual(resultBlock.success, true);
+    assert.strictEqual(resultBlock.policy.decision, 'BLOCK');
+    assert.strictEqual(resultBlock.detection.detected, true);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('17. Protected /api/detect requires extension bearer auth and is rejected with 401 when unauthenticated', async () => {
+  const mock = createMockFetch(async (url, options) => {
+    // If an unauthenticated call hits /api/detect, mock 401 Unauthorized
+    if (url === `${API_BASE_URL}/api/detect` && !options?.headers?.Authorization) {
+      return {
+        ok: false,
+        status: 401,
+        json: async () => ({ detail: 'Invalid authentication credentials' }),
+      };
+    }
+    return { ok: true, json: async () => ({}) };
+  });
+
+  try {
+    // Calling protected detect endpoint without Bearer token must return 401
+    const res = await fetch(`${API_BASE_URL}/api/detect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'test prompt' }),
+    });
+    assert.strictEqual(res.status, 401);
+    const body = await res.json();
+    assert.strictEqual(body.detail, 'Invalid authentication credentials');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('18. Predefined synthetic results are populated for safe, warning, and blocked scenarios', () => {
+  assert(PREDEFINED_DEMO_RESULTS.safe);
+  assert.strictEqual(PREDEFINED_DEMO_RESULTS.safe.policy.decision, 'ALLOW');
+  assert.strictEqual(PREDEFINED_DEMO_RESULTS.safe.risk.score, 0);
+
+  assert(PREDEFINED_DEMO_RESULTS.warning);
+  assert.strictEqual(PREDEFINED_DEMO_RESULTS.warning.policy.decision, 'WARN');
+  assert.strictEqual(PREDEFINED_DEMO_RESULTS.warning.risk.level, 'MEDIUM');
+
+  assert(PREDEFINED_DEMO_RESULTS.blocked);
+  assert.strictEqual(PREDEFINED_DEMO_RESULTS.blocked.policy.decision, 'BLOCK');
+  assert.strictEqual(PREDEFINED_DEMO_RESULTS.blocked.detection.detected, true);
+});
+

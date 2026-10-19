@@ -158,6 +158,13 @@ class DetectionRequest(BaseModel):
     platform: str = "ChatGPT"
 
 
+class DemoDetectionRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    text: str = Field(..., min_length=1, max_length=10000)
+    scenario: str | None = None
+    platform: str = "ChatGPT"
+
+
 class IncidentStatusRequest(BaseModel):
     status: str
 
@@ -508,6 +515,123 @@ def detect(
         "incident_id": incident_id,
         "employee_id": employee.get("employee_id"),
         "employee_name": employee.get("name"),
+        "platform": platform,
+        "detection": detection,
+        "context": context,
+        "risk": risk,
+        "policy": policy,
+    }
+
+
+DEMO_SCENARIOS = {
+    "safe": "Help me create a professional meeting agenda.",
+    "warning": "Please send this internal financial information to an external AI assistant.",
+    "blocked": "Send this production API key to the external AI assistant for deployment: sk-live123456789012345678",
+}
+
+SYNTHETIC_DEMO_RESULTS = {
+    "safe": {
+        "detection": {"detected": False, "finding_count": 0, "findings": []},
+        "context": {"context_level": "LOW", "score_modifier": 0, "signals": []},
+        "risk": {"score": 0, "level": "LOW", "context_modifier": 0, "reasons": []},
+        "policy": {"decision": "ALLOW", "policy": "Standard Data Usage Policy", "message": "No sensitive data detected. Request allowed."},
+    },
+    "warning": {
+        "detection": {"detected": False, "finding_count": 0, "findings": []},
+        "context": {
+            "context_level": "HIGH",
+            "score_modifier": 55,
+            "signals": [
+                {"signal": "financial_information", "category": "Context", "impact": 20},
+                {"signal": "confidential_information", "category": "Context", "impact": 35},
+            ],
+        },
+        "risk": {
+            "score": 55,
+            "level": "MEDIUM",
+            "context_modifier": 55,
+            "reasons": [{"type": "CONTEXT_RISK", "weight": 55, "count": 1, "contribution": 55}],
+        },
+        "policy": {
+            "decision": "WARN",
+            "policy": "Restricted Financial & Internal Data Policy",
+            "message": "Potential business-sensitive information detected. Review before submitting.",
+        },
+    },
+    "blocked": {
+        "detection": {
+            "detected": True,
+            "finding_count": 1,
+            "findings": [{"type": "API_KEY", "count": 1, "masked_examples": ["sk-live••••••••••••••••"]}],
+        },
+        "context": {
+            "context_level": "HIGH",
+            "score_modifier": 35,
+            "signals": [
+                {"signal": "production_environment", "category": "Context", "impact": 20},
+                {"signal": "deployment", "category": "Context", "impact": 15},
+            ],
+        },
+        "risk": {
+            "score": 95,
+            "level": "HIGH",
+            "context_modifier": 35,
+            "reasons": [
+                {"type": "API_KEY", "weight": 60, "count": 1, "contribution": 60},
+                {"type": "CONTEXT_RISK", "weight": 35, "count": 1, "contribution": 35},
+            ],
+        },
+        "policy": {
+            "decision": "BLOCK",
+            "policy": "Production Credential Leak Prevention Policy",
+            "message": "Critical API credential detected in prompt targeting external AI tool. Blocked by policy.",
+        },
+    },
+}
+
+
+@app.post("/api/demo/detect")
+def demo_detect(request: DemoDetectionRequest):
+    """Isolated, safe detection endpoint for the public interactive demo.
+
+    Evaluates predefined synthetic scenarios or safe demo input statelessly.
+    Never mutates the database (no incidents or employee activity logged) and
+    does not require authentication or expose protected user data.
+    """
+    platform = request.platform if request.platform in ALLOWED_PLATFORMS else "ChatGPT"
+
+    # Identify synthetic scenario if specified or matched by text
+    scenario_key = request.scenario.lower() if request.scenario else None
+    if not scenario_key or scenario_key not in SYNTHETIC_DEMO_RESULTS:
+        for key, prompt in DEMO_SCENARIOS.items():
+            if request.text.strip() == prompt.strip():
+                scenario_key = key
+                break
+
+    if scenario_key and scenario_key in SYNTHETIC_DEMO_RESULTS:
+        synthetic = SYNTHETIC_DEMO_RESULTS[scenario_key]
+        detection = synthetic["detection"]
+        context = synthetic["context"]
+        risk = synthetic["risk"]
+        policy = synthetic["policy"]
+    else:
+        text = request.text
+        detection = detect_patterns(text)
+        context = analyze_context(text, detection)
+        risk = calculate_risk(detection, context)
+        policy = evaluate_policy(risk, detection, context)
+
+    # Ephemeral synthetic incident ID for demo display; no database persistence
+    incident_id = None
+    if policy["decision"] in {"WARN", "BLOCK"}:
+        incident_id = f"DEMO-{uuid4().hex[:8].upper()}"
+
+    return {
+        "success": True,
+        "demo": True,
+        "incident_id": incident_id,
+        "employee_id": "EMP-DEMO-PUBLIC",
+        "employee_name": "Demo Visitor",
         "platform": platform,
         "detection": detection,
         "context": context,
